@@ -31,7 +31,6 @@ body {
 header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   padding: 6px 12px;
   border-bottom: 1px solid var(--border);
@@ -47,8 +46,57 @@ header .controls {
 main {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 200px 1fr 1fr;
   min-height: 0;
+}
+
+#files {
+  overflow: auto;
+  padding: 8px 0;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+}
+
+#files .file {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 12px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+#files .file:hover {
+  background: rgb(128 128 128 / 15%);
+}
+
+#files .file.active {
+  font-weight: 600;
+  background: rgb(128 128 128 / 22%);
+}
+
+#files .badge {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: rgb(128 128 128 / 30%);
+  font-size: 11px;
+}
+
+#files .empty {
+  margin: 8px 12px;
+  opacity: 0.6;
+}
+
+.file-status {
+  flex: 1;
+  opacity: 0.75;
 }
 
 #editor {

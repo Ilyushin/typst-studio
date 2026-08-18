@@ -5,6 +5,8 @@ import { invoke } from "@tauri-apps/api/core";
 export interface Diagnostic {
   message: string;
   error: boolean;
+  /** Path relative to the project root, absent for an unsaved document. */
+  file: string | null;
   /** Offsets in UTF-16 code units, absent when the diagnostic points elsewhere. */
   from: number | null;
   to: number | null;
@@ -50,12 +52,49 @@ export interface CompileResult {
   diagnostics: Diagnostic[];
 }
 
+/** A document opened in the editor. */
+export interface OpenFile {
+  path: string;
+  text: string;
+  /** Whether this file is the one being compiled. */
+  compiled: boolean;
+  dirty: boolean;
+}
+
 export class Backend {
   private constructor(private readonly session: number) {}
 
   static async create(root: string): Promise<Backend> {
     const session = await invoke<number>("create_session", { root });
     return new Backend(session);
+  }
+
+  openProject(root: string): Promise<string[]> {
+    return invoke("open_project", { session: this.session, root });
+  }
+
+  projectFiles(): Promise<string[]> {
+    return invoke("project_files", { session: this.session });
+  }
+
+  openFile(path: string): Promise<OpenFile> {
+    return invoke("open_file", { session: this.session, path });
+  }
+
+  setCompiled(): Promise<void> {
+    return invoke("set_compiled", { session: this.session });
+  }
+
+  save(): Promise<void> {
+    return invoke("save", { session: this.session });
+  }
+
+  isDirty(): Promise<boolean> {
+    return invoke("is_dirty", { session: this.session });
+  }
+
+  reload(): Promise<OpenFile | null> {
+    return invoke("reload", { session: this.session });
   }
 
   openDocument(text: string, path: string | null = null): Promise<void> {

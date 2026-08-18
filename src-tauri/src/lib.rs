@@ -4,16 +4,25 @@
 //! feeds edits into it, and asks for pages to display.
 
 mod commands;
+mod watch;
 
 use typst_studio_core::Workspace;
 
 /// Runs the desktop application.
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(Workspace::new())
         .invoke_handler(tauri::generate_handler![
             commands::create_session,
             commands::close_session,
+            commands::open_project,
+            commands::project_files,
+            commands::open_file,
+            commands::set_compiled,
+            commands::save,
+            commands::is_dirty,
+            commands::reload,
             commands::open_document,
             commands::apply_edit,
             commands::compile,

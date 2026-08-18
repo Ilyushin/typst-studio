@@ -7,6 +7,12 @@
   </head>
   <body>
     <header>
+      <span class="controls">
+        <button id="open-project" type="button"></button>
+        <button id="save" type="button"></button>
+        <button id="preview-this" type="button"></button>
+      </span>
+      <span id="file-status" class="file-status"></span>
       <span id="status"></span>
       <span class="controls">
         <select id="language"></select>
@@ -14,6 +20,7 @@
       </span>
     </header>
     <main>
+      <nav id="files"></nav>
       <div id="editor"></div>
       <div id="preview"></div>
     </main>

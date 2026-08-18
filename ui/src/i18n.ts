@@ -18,6 +18,16 @@ interface Strings {
   stale(errors: number): string;
   startupFailed(error: string): string;
   readonly languageLabel: string;
+  readonly openProject: string;
+  readonly save: string;
+  readonly modified: string;
+  readonly compileThis: string;
+  readonly compiledFile: string;
+  readonly noProject: string;
+  /** Warning when a file changed on disk while it had unsaved edits. */
+  changedOnDisk(path: string): string;
+  /** Summary of diagnostics that point into other files. */
+  elsewhere(count: number): string;
   /** Starter document, in the interface language. */
   readonly sampleDocument: string;
 }
@@ -42,6 +52,15 @@ const EN: Strings = {
     `${errors} ${plural("en", errors, { one: "error", other: "errors" })} · showing last good version`,
   startupFailed: (error) => `startup failed: ${error}`,
   languageLabel: "Language",
+  openProject: "Open folder",
+  save: "Save",
+  modified: "modified",
+  compileThis: "Preview this file",
+  compiledFile: "previewed",
+  noProject: "no folder open",
+  changedOnDisk: (path) => `${path} changed on disk; your unsaved edits were kept`,
+  elsewhere: (count) =>
+    `${count} ${plural("en", count, { one: "message", other: "messages" })} in other files`,
   sampleDocument: `= Hello, Typst
 
 This is your *first* document. A formula: $f(x) = x^2$.
@@ -70,6 +89,21 @@ const RU: Strings = {
     })} · показана последняя рабочая версия`,
   startupFailed: (error) => `не удалось запустить: ${error}`,
   languageLabel: "Язык",
+  openProject: "Открыть папку",
+  save: "Сохранить",
+  modified: "изменён",
+  compileThis: "Показать этот файл",
+  compiledFile: "в превью",
+  noProject: "папка не открыта",
+  changedOnDisk: (path) =>
+    `${path} изменён на диске; несохранённые правки сохранены`,
+  elsewhere: (count) =>
+    `${count} ${plural("ru", count, {
+      one: "сообщение",
+      few: "сообщения",
+      many: "сообщений",
+      other: "сообщения",
+    })} в других файлах`,
   // `lang` gives Typst the right hyphenation and quotation marks.
   sampleDocument: `#set text(lang: "ru")
 

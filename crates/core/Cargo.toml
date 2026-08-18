@@ -19,6 +19,7 @@ typst-kit = { workspace = true, features = [
     "universe-packages",
     "system-downloader",
     "datetime",
+    "watcher",
 ] }
 ecow = { workspace = true }
 rustc-hash = { workspace = true }

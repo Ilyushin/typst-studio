@@ -1,4 +1,4 @@
-/** Wires the editor, the compiler backend, and the preview together. */
+/** Wires the editor, the compiler backend, the file list, and the preview. */
 
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, highlightActiveLine } from "@codemirror/view";
@@ -8,8 +8,11 @@ import {
   setDiagnostics,
   type Diagnostic as LintDiagnostic,
 } from "@codemirror/lint";
+import { listen } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import { Backend, openWindow, type Diagnostic } from "./backend";
+import { FileList } from "./files";
 import { ideExtensions } from "./ide";
 import { Preview } from "./preview";
 import { LANGUAGES, language, setLanguage, t, type Language } from "./i18n";
@@ -24,16 +27,25 @@ const CURSOR_DEBOUNCE_MS = 150;
 /** What the status line currently shows, so it can be redrawn on a language switch. */
 type Status =
   | { kind: "starting" }
-  | { kind: "compiled"; pages: number; ms: number }
+  | { kind: "compiled"; pages: number; ms: number; elsewhere: number }
   | { kind: "stale"; errors: number }
+  | { kind: "warning"; text: string }
   | { kind: "failed"; error: string };
 
 async function main(): Promise<void> {
   const status = new StatusLine(document.querySelector<HTMLElement>("#status")!);
-  const backend = await Backend.create(await projectRoot());
+  const backend = await Backend.create(await homeDirectory());
 
-  const initial = t().sampleDocument;
-  await backend.openDocument(initial);
+  /** Path of the file being edited, absent for the unsaved starter document. */
+  let activePath: string | undefined;
+  /** Path of the file being compiled. */
+  let compiledPath: string | undefined;
+  let dirty = false;
+
+  const files = new FileList(
+    document.querySelector<HTMLElement>("#files")!,
+    (path) => void openFile(path),
+  );
 
   const preview = new Preview(
     document.querySelector<HTMLElement>("#preview")!,
@@ -41,11 +53,16 @@ async function main(): Promise<void> {
     (page, x, y) => void jumpToSource(page, x, y),
   );
 
+  const initial = t().sampleDocument;
+  await backend.openDocument(initial);
+
   // Edits are shipped to Rust one by one, in order. The queue keeps them from
   // interleaving with each other or with a compilation.
   let queue: Promise<unknown> = Promise.resolve();
   let timer: number | undefined;
   let cursorTimer: number | undefined;
+  /** Set while the editor content is replaced wholesale, which is not an edit. */
+  let switching = false;
 
   const view = new EditorView({
     parent: document.querySelector<HTMLElement>("#editor")!,
@@ -56,7 +73,17 @@ async function main(): Promise<void> {
         highlightActiveLine(),
         history(),
         lintGutter(),
-        keymap.of([...defaultKeymap, ...historyKeymap]),
+        keymap.of([
+          {
+            key: "Mod-s",
+            run: () => {
+              void saveActive();
+              return true;
+            },
+          },
+          ...defaultKeymap,
+          ...historyKeymap,
+        ]),
         EditorView.lineWrapping,
         ...ideExtensions(backend, () => queue.then(() => undefined)),
         EditorView.updateListener.of((update) => {
@@ -64,7 +91,7 @@ async function main(): Promise<void> {
             window.clearTimeout(cursorTimer);
             cursorTimer = window.setTimeout(locateCursor, CURSOR_DEBOUNCE_MS);
           }
-          if (!update.docChanged) return;
+          if (!update.docChanged || switching) return;
 
           // Apply from the end backwards, so earlier offsets stay valid.
           const edits: Array<[number, number, string]> = [];
@@ -74,6 +101,9 @@ async function main(): Promise<void> {
           for (const [from, to, text] of edits.reverse()) {
             queue = queue.then(() => backend.applyEdit(from, to, text));
           }
+
+          dirty = true;
+          labels.apply();
 
           window.clearTimeout(timer);
           timer = window.setTimeout(recompile, DEBOUNCE_MS);
@@ -88,16 +118,80 @@ async function main(): Promise<void> {
       const result = await backend.compile();
       const ms = Math.round(performance.now() - started);
 
-      view.dispatch(setDiagnostics(view.state, toLint(result.diagnostics, view)));
+      // Diagnostics without offsets belong to other files; they are counted,
+      // not underlined, since there is nothing on screen to underline.
+      const here = result.diagnostics.filter((d) => d.from !== null);
+      const elsewhere = result.diagnostics.length - here.length;
+      view.dispatch(setDiagnostics(view.state, toLint(here, view)));
       preview.update(result.pages);
 
       status.set(
         result.updated
-          ? { kind: "compiled", pages: result.pages, ms }
+          ? { kind: "compiled", pages: result.pages, ms, elsewhere }
           : { kind: "stale", errors: result.diagnostics.filter((d) => d.error).length },
       );
     });
     await queue;
+  }
+
+  /** Replaces the editor content without reporting it as a user edit. */
+  function setDocument(text: string): void {
+    switching = true;
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: text },
+      selection: { anchor: 0 },
+    });
+    switching = false;
+  }
+
+  async function chooseProject(): Promise<void> {
+    const chosen = await openDialog({ directory: true });
+    if (typeof chosen !== "string") return;
+
+    const paths = await backend.openProject(chosen);
+    files.update(paths);
+    activePath = undefined;
+    compiledPath = undefined;
+
+    // A project usually has an obvious entry point; otherwise take the first.
+    const entry = paths.find((path) => path === "main.typ") ?? paths[0];
+    if (entry === undefined) {
+      labels.apply();
+      return;
+    }
+
+    await openFile(entry);
+    await previewActive();
+  }
+
+  async function openFile(path: string): Promise<void> {
+    await queue;
+    const file = await backend.openFile(path);
+
+    setDocument(file.text);
+    activePath = file.path;
+    dirty = file.dirty;
+    if (file.compiled) compiledPath = file.path;
+
+    files.mark(activePath, compiledPath);
+    labels.apply();
+    await recompile();
+  }
+
+  /** Makes the file in the editor the one shown in the preview. */
+  async function previewActive(): Promise<void> {
+    await queue;
+    await backend.setCompiled();
+    compiledPath = activePath;
+    files.mark(activePath, compiledPath);
+    await recompile();
+  }
+
+  async function saveActive(): Promise<void> {
+    await queue;
+    await backend.save();
+    dirty = false;
+    labels.apply();
   }
 
   /** Shows where the cursor's text sits in the preview. */
@@ -114,14 +208,37 @@ async function main(): Promise<void> {
     if (destination?.kind !== "cursor") return;
 
     const offset = Math.min(destination.offset, view.state.doc.length);
-    view.dispatch({
-      selection: { anchor: offset },
-      scrollIntoView: true,
-    });
+    view.dispatch({ selection: { anchor: offset }, scrollIntoView: true });
     view.focus();
   }
 
-  const labels = new Labels(status);
+  // Something changed on disk: pull it in when the editor has nothing to lose,
+  // and say so when it does.
+  await listen("files-changed", () => {
+    void (async () => {
+      await queue;
+      const reloaded = await backend.reload();
+      if (reloaded) {
+        setDocument(reloaded.text);
+        dirty = false;
+      } else if (activePath !== undefined && dirty) {
+        status.set({ kind: "warning", text: t().changedOnDisk(activePath) });
+      }
+
+      files.update(await backend.projectFiles());
+      files.mark(activePath, compiledPath);
+      labels.apply();
+      await recompile();
+    })();
+  });
+
+  const labels = new Labels(status, files, {
+    path: () => activePath,
+    dirty: () => dirty,
+    onOpenProject: () => void chooseProject(),
+    onSave: () => void saveActive(),
+    onPreviewActive: () => void previewActive(),
+  });
   labels.apply();
 
   window.addEventListener("beforeunload", () => void backend.close());
@@ -151,11 +268,19 @@ class StatusLine {
       case "starting":
         this.element.textContent = strings.starting;
         break;
-      case "compiled":
-        this.element.textContent = strings.compiled(this.status.pages, this.status.ms);
+      case "compiled": {
+        const base = strings.compiled(this.status.pages, this.status.ms);
+        this.element.textContent =
+          this.status.elsewhere > 0
+            ? `${base} · ${strings.elsewhere(this.status.elsewhere)}`
+            : base;
         break;
+      }
       case "stale":
         this.element.textContent = strings.stale(this.status.errors);
+        break;
+      case "warning":
+        this.element.textContent = this.status.text;
         break;
       case "failed":
         this.element.textContent = strings.startupFailed(this.status.error);
@@ -164,19 +289,39 @@ class StatusLine {
   }
 }
 
-/** Applies translations to the static chrome and drives the language picker. */
+/** What the chrome needs to know and do, without reaching into `main`. */
+interface Chrome {
+  path(): string | undefined;
+  dirty(): boolean;
+  onOpenProject(): void;
+  onSave(): void;
+  onPreviewActive(): void;
+}
+
+/** Applies translations to the static chrome and drives its buttons. */
 class Labels {
-  private readonly button = document.querySelector<HTMLButtonElement>("#new-window")!;
+  private readonly newWindow = document.querySelector<HTMLButtonElement>("#new-window")!;
+  private readonly openProject =
+    document.querySelector<HTMLButtonElement>("#open-project")!;
+  private readonly save = document.querySelector<HTMLButtonElement>("#save")!;
+  private readonly previewThis =
+    document.querySelector<HTMLButtonElement>("#preview-this")!;
+  private readonly fileStatus = document.querySelector<HTMLElement>("#file-status")!;
   private readonly picker = document.querySelector<HTMLSelectElement>("#language")!;
 
-  constructor(private readonly status: StatusLine) {
+  constructor(
+    private readonly status: StatusLine,
+    private readonly files: FileList,
+    private readonly chrome: Chrome,
+  ) {
     this.picker.replaceChildren(
       ...LANGUAGES.map((code) => {
         const option = document.createElement("option");
         option.value = code;
         // Each language names itself, as language pickers conventionally do.
-        option.textContent = new Intl.DisplayNames([code], { type: "language" })
-          .of(code)!;
+        option.textContent = new Intl.DisplayNames([code], { type: "language" }).of(
+          code,
+        )!;
         return option;
       }),
     );
@@ -184,17 +329,35 @@ class Labels {
       setLanguage(this.picker.value as Language);
       this.apply();
     });
+
+    this.openProject.addEventListener("click", () => chrome.onOpenProject());
+    this.save.addEventListener("click", () => chrome.onSave());
+    this.previewThis.addEventListener("click", () => chrome.onPreviewActive());
   }
 
   apply(): void {
     const strings = t();
     document.documentElement.lang = language();
     document.title = strings.appName;
-    this.button.textContent = strings.newWindow;
+
+    this.newWindow.textContent = strings.newWindow;
+    this.openProject.textContent = strings.openProject;
+    this.save.textContent = strings.save;
+    this.previewThis.textContent = strings.compileThis;
+
+    const path = this.chrome.path();
+    this.fileStatus.textContent =
+      path === undefined
+        ? ""
+        : this.chrome.dirty()
+          ? `${path} · ${strings.modified}`
+          : path;
+
     this.picker.value = language();
     this.picker.title = strings.languageLabel;
     this.picker.setAttribute("aria-label", strings.languageLabel);
     this.status.redraw();
+    this.files.relabel();
   }
 }
 
@@ -212,8 +375,8 @@ function toLint(diagnostics: Diagnostic[], view: EditorView): LintDiagnostic[] {
     }));
 }
 
-/** The directory that imports and packages resolve against. */
-async function projectRoot(): Promise<string> {
+/** Fallback root until the user opens a project. */
+async function homeDirectory(): Promise<string> {
   const { homeDir } = await import("@tauri-apps/api/path");
   return homeDir();
 }

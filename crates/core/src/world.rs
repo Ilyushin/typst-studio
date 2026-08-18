@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use ecow::EcoString;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use typst::diag::{FileError, FileResult};
 use typst::foundations::{Bytes, Datetime, Duration};
 use typst::syntax::package::PackageSpec;
@@ -38,6 +38,8 @@ pub struct StudioWorld {
     root: PathBuf,
     files: FileStore<SystemFiles>,
     open: FxHashMap<FileId, Source>,
+    /// Documents edited since they were last read from or written to disk.
+    dirty: FxHashSet<FileId>,
     main: FileId,
     now: Time,
 }
@@ -62,6 +64,7 @@ impl StudioWorld {
             files: FileStore::new(SystemFiles::new(FsRoot::new(root.clone()), packages)),
             root,
             open: FxHashMap::default(),
+            dirty: FxHashSet::default(),
             main: *SCRATCH_ID,
             now: Time::system(),
         }
@@ -84,7 +87,23 @@ impl StudioWorld {
         Ok(RootedPath::new(VirtualRoot::Project, vpath).intern())
     }
 
+    /// Resolves a path relative to the project root to a file id.
+    pub fn id_for_relative(&self, path: &str) -> FileResult<FileId> {
+        self.id_for(&self.root.join(path))
+    }
+
+    /// The path of a file relative to the project root, for display.
+    pub fn relative_path(&self, id: FileId) -> Option<String> {
+        if id == *SCRATCH_ID {
+            return None;
+        }
+        Some(id.vpath().get_without_slash().to_string())
+    }
+
     /// Opens a document in the editor, making it override the on-disk state.
+    ///
+    /// Also makes it the compiled document; call [`set_main`](Self::set_main)
+    /// afterwards to edit a file that is included by another one.
     ///
     /// Pass `None` as the path for a document that has not been saved yet.
     pub fn open(&mut self, path: Option<&Path>, text: String) -> FileResult<FileId> {
@@ -93,8 +112,79 @@ impl StudioWorld {
             None => *SCRATCH_ID,
         };
         self.open.insert(id, Source::new(id, text));
+        self.dirty.remove(&id);
         self.main = id;
         Ok(id)
+    }
+
+    /// Opens a file from disk without changing which document is compiled.
+    pub fn open_from_disk(&mut self, path: &str) -> FileResult<FileId> {
+        let id = self.id_for_relative(path)?;
+        if !self.open.contains_key(&id) {
+            let source = self.files.source(id)?;
+            self.open.insert(id, source);
+            self.dirty.remove(&id);
+        }
+        Ok(id)
+    }
+
+    /// Re-reads an open document from disk, discarding the in-memory copy.
+    pub fn reload(&mut self, id: FileId) -> FileResult<()> {
+        self.files.reset();
+        let source = self.files.source(id)?;
+        self.open.insert(id, source);
+        self.dirty.remove(&id);
+        Ok(())
+    }
+
+    /// Whether a document has unsaved changes.
+    pub fn is_dirty(&self, id: FileId) -> bool {
+        self.dirty.contains(&id)
+    }
+
+    /// Writes an open document back to disk.
+    ///
+    /// Fails for a document that has no path yet.
+    pub fn save(&mut self, id: FileId) -> FileResult<()> {
+        let source = self.open.get(&id).ok_or(FileError::Other(None))?;
+        let path = self
+            .files
+            .loader()
+            .resolve(id)
+            .map_err(|_| FileError::NotFound(self.root.clone()))?;
+
+        std::fs::write(&path, source.text())
+            .map_err(|err| FileError::from_io(err, &path))?;
+        self.dirty.remove(&id);
+        Ok(())
+    }
+
+    /// The ids of all documents open in this window.
+    pub fn open_documents(&self) -> Vec<FileId> {
+        self.open.keys().copied().collect()
+    }
+
+    /// Closes a document, discarding any unsaved changes.
+    pub fn close(&mut self, id: FileId) {
+        self.open.remove(&id);
+        self.dirty.remove(&id);
+    }
+
+    /// The Typst files in the project, relative to the root, sorted.
+    ///
+    /// Hidden directories and the usual build output are skipped; a project is
+    /// a source tree, not a file manager.
+    pub fn project_files(&self) -> Vec<String> {
+        let mut files = Vec::new();
+        collect_typst_files(&self.root, &self.root, &mut files);
+        files.sort();
+        files
+    }
+
+    /// The files the last compilation read, for the file watcher.
+    pub fn dependencies(&mut self) -> Vec<PathBuf> {
+        let (loader, deps) = self.files.dependencies();
+        deps.filter_map(|id| loader.resolve(id).ok()).collect()
     }
 
     /// The current text of an open document.
@@ -112,7 +202,9 @@ impl StudioWorld {
         replace: std::ops::Range<usize>,
         with: &str,
     ) -> Option<std::ops::Range<usize>> {
-        Some(self.open.get_mut(&id)?.edit(replace, with))
+        let range = self.open.get_mut(&id)?.edit(replace, with);
+        self.dirty.insert(id);
+        Some(range)
     }
 
     /// Selects which open document is compiled.
@@ -179,5 +271,30 @@ impl typst_ide::IdeWorld for StudioWorld {
 
     fn files(&self) -> Vec<FileId> {
         self.open.keys().copied().collect()
+    }
+}
+
+/// Walks the project tree, collecting Typst sources.
+fn collect_typst_files(root: &Path, dir: &Path, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+
+        if name.starts_with('.') || name == "target" || name == "node_modules" {
+            continue;
+        }
+
+        if path.is_dir() {
+            collect_typst_files(root, &path, out);
+        } else if path.extension().is_some_and(|ext| ext == "typ")
+            && let Ok(relative) = path.strip_prefix(root)
+        {
+            out.push(relative.to_string_lossy().replace('\\', "/"));
+        }
     }
 }

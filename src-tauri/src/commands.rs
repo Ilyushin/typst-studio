@@ -31,8 +31,11 @@ pub struct CompileResult {
 pub struct Diagnostic {
     pub message: String,
     pub error: bool,
-    /// Start offset in UTF-16 code units, absent if the diagnostic does not
-    /// point into the document being edited.
+    /// Path relative to the project root, absent for an unsaved document or a
+    /// diagnostic that points nowhere.
+    pub file: Option<String>,
+    /// Start offset in UTF-16 code units, present only when the diagnostic
+    /// points into the document currently being edited.
     pub from: Option<usize>,
     pub to: Option<usize>,
 }
@@ -98,6 +101,138 @@ pub fn close_session(workspace: State<Workspace>, session: SessionId) -> bool {
     workspace.close(session)
 }
 
+/// Opens a project directory, discarding the session's previous state.
+#[tauri::command]
+pub fn open_project(
+    app: tauri::AppHandle,
+    workspace: State<Workspace>,
+    session: SessionId,
+    root: String,
+) -> Response<Vec<String>> {
+    let files = project(workspace.inner(), session, root)?;
+    crate::watch::watch(app, session);
+    Ok(files)
+}
+
+pub(crate) fn project(
+    workspace: &Workspace,
+    session: SessionId,
+    root: String,
+) -> Response<Vec<String>> {
+    let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
+    let mut session = handle.lock().map_err(lock_poisoned)?;
+    session.open_project(PathBuf::from(root));
+    Ok(session.world_ref().project_files())
+}
+
+/// The Typst files in the project.
+#[tauri::command]
+pub fn project_files(
+    workspace: State<Workspace>,
+    session: SessionId,
+) -> Response<Vec<String>> {
+    let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
+    let session = handle.lock().map_err(lock_poisoned)?;
+    Ok(session.world_ref().project_files())
+}
+
+/// The document shown in the editor.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenFile {
+    pub path: String,
+    pub text: String,
+    /// Whether this file is the one being compiled.
+    pub compiled: bool,
+    pub dirty: bool,
+}
+
+/// Opens a project file for editing, leaving the compiled document alone.
+#[tauri::command]
+pub fn open_file(
+    workspace: State<Workspace>,
+    session: SessionId,
+    path: String,
+) -> Response<OpenFile> {
+    file(workspace.inner(), session, path)
+}
+
+pub(crate) fn file(
+    workspace: &Workspace,
+    session: SessionId,
+    path: String,
+) -> Response<OpenFile> {
+    let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
+    let mut session = handle.lock().map_err(lock_poisoned)?;
+
+    let id = session.open_file(&path).map_err(|err| err.to_string())?;
+    let text = session.world_ref().source_text(id).unwrap_or_default();
+
+    Ok(OpenFile {
+        path,
+        text,
+        compiled: session.world_ref().main_id() == id,
+        dirty: session.world_ref().is_dirty(id),
+    })
+}
+
+/// Makes the file in the editor the one that gets compiled.
+#[tauri::command]
+pub fn set_compiled(workspace: State<Workspace>, session: SessionId) -> Response<()> {
+    let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
+    let mut session = handle.lock().map_err(lock_poisoned)?;
+    let active = session.active_id();
+    session.world().set_main(active);
+    Ok(())
+}
+
+/// Writes the document in the editor back to disk.
+#[tauri::command]
+pub fn save(workspace: State<Workspace>, session: SessionId) -> Response<()> {
+    store(workspace.inner(), session)
+}
+
+pub(crate) fn store(workspace: &Workspace, session: SessionId) -> Response<()> {
+    let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
+    let mut session = handle.lock().map_err(lock_poisoned)?;
+    let active = session.active_id();
+    session.save(active).map_err(|err| err.to_string())
+}
+
+/// Re-reads the document in the editor from disk after an external change.
+///
+/// Returns `false` when it has unsaved changes, leaving them untouched for the
+/// user to resolve.
+#[tauri::command]
+pub fn reload(workspace: State<Workspace>, session: SessionId) -> Response<Option<OpenFile>> {
+    let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
+    let mut session = handle.lock().map_err(lock_poisoned)?;
+
+    if !session.reload_active().map_err(|err| err.to_string())? {
+        return Ok(None);
+    }
+
+    let id = session.active_id();
+    let Some(path) = session.world_ref().relative_path(id) else {
+        return Ok(None);
+    };
+
+    Ok(Some(OpenFile {
+        path,
+        text: session.world_ref().source_text(id).unwrap_or_default(),
+        compiled: session.world_ref().main_id() == id,
+        dirty: false,
+    }))
+}
+
+/// Whether the document in the editor has unsaved changes.
+#[tauri::command]
+pub fn is_dirty(workspace: State<Workspace>, session: SessionId) -> Response<bool> {
+    let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
+    let session = handle.lock().map_err(lock_poisoned)?;
+    Ok(session.world_ref().is_dirty(session.active_id()))
+}
+
 /// Opens a document in the session, replacing whatever was open.
 #[tauri::command]
 pub fn open_document(
@@ -149,7 +284,7 @@ pub(crate) fn edit(
     let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
     let mut session = handle.lock().map_err(lock_poisoned)?;
 
-    let id = session.world().main_id();
+    let id = session.active_id();
     let current = session
         .world()
         .source_text(id)
@@ -177,24 +312,25 @@ pub(crate) fn recompile(
     let mut session = handle.lock().map_err(lock_poisoned)?;
 
     let preview = session.preview();
-    let id = session.world().main_id();
-    let text = session.world().source_text(id).unwrap_or_default();
+    let active = session.active_id();
+    let text = session.world().source_text(active).unwrap_or_default();
 
     let diagnostics = preview
         .diagnostics
         .iter()
         .map(|diag| {
-            // Only offsets inside the edited document are meaningful to the
-            // editor; a diagnostic from an imported file has no place to point.
+            // Offsets are only meaningful for the document on screen; for other
+            // files the path is all the editor can act on.
             let range = diag
                 .range
                 .clone()
-                .filter(|_| diag.file == Some(id))
+                .filter(|_| diag.file == Some(active))
                 .map(|r| (utf16_offset(&text, r.start), utf16_offset(&text, r.end)));
 
             Diagnostic {
                 message: diag.message.clone(),
                 error: diag.error,
+                file: diag.file.and_then(|id| session.world_ref().relative_path(id)),
                 from: range.map(|(from, _)| from),
                 to: range.map(|(_, to)| to),
             }
@@ -227,7 +363,7 @@ pub(crate) fn completions(
 ) -> Response<Option<Completions>> {
     let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
     let session = handle.lock().map_err(lock_poisoned)?;
-    let Some(text) = main_text(&session) else {
+    let Some(text) = active_text(&session) else {
         return Ok(None);
     };
 
@@ -267,7 +403,7 @@ pub(crate) fn hover(
 ) -> Response<Option<TooltipInfo>> {
     let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
     let session = handle.lock().map_err(lock_poisoned)?;
-    let Some(text) = main_text(&session) else {
+    let Some(text) = active_text(&session) else {
         return Ok(None);
     };
 
@@ -305,8 +441,8 @@ pub(crate) fn click(
     let session = handle.lock().map_err(lock_poisoned)?;
 
     Ok(session.jump_from_click(page, x, y).map(|jump| match jump {
-        Jump::Source { file, offset } if file == session.world_ref().main_id() => {
-            let text = main_text(&session).unwrap_or_default();
+        Jump::Source { file, offset } if file == session.active_id() => {
+            let text = active_text(&session).unwrap_or_default();
             Destination::Cursor { offset: utf16_offset(&text, offset) }
         }
         Jump::Source { .. } => Destination::OtherFile,
@@ -332,7 +468,7 @@ pub(crate) fn cursor_spots(
 ) -> Response<Vec<Spot>> {
     let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
     let session = handle.lock().map_err(lock_poisoned)?;
-    let Some(text) = main_text(&session) else {
+    let Some(text) = active_text(&session) else {
         return Ok(Vec::new());
     };
 
@@ -371,8 +507,8 @@ pub fn open_window(app: tauri::AppHandle) -> Response<String> {
 }
 
 /// The text of the document being edited, if one is open.
-fn main_text(session: &typst_studio_core::Session) -> Option<String> {
-    session.world_ref().source_text(session.world_ref().main_id())
+fn active_text(session: &typst_studio_core::Session) -> Option<String> {
+    session.world_ref().source_text(session.active_id())
 }
 
 fn spot(position: DocPosition) -> Spot {
@@ -539,6 +675,129 @@ mod tests {
         let spot = spots.first().expect("cursor should map into the document");
         assert_eq!(spot.page, 0);
         assert!((0.0..=1.0).contains(&spot.x) && (0.0..=1.0).contains(&spot.y));
+    }
+
+    fn project_dir(files: &[(&str, &str)]) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "typst-studio-cmd-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        for (name, content) in files {
+            std::fs::write(root.join(name), content).unwrap();
+        }
+        root
+    }
+
+    /// Editing an included file keeps the preview on the compiled document and
+    /// reflects the edit — the acceptance criterion for project files.
+    #[test]
+    fn editing_an_include_updates_the_compiled_document() {
+        let root = project_dir(&[
+            ("main.typ", "= Main\n\n#include \"chapter.typ\"\n"),
+            ("chapter.typ", "= Chapter\n"),
+        ]);
+        let workspace = Workspace::new();
+        let session = workspace.create(root.clone());
+
+        let files = project(&workspace, session, root.display().to_string()).unwrap();
+        assert_eq!(files, vec!["chapter.typ", "main.typ"]);
+
+        file(&workspace, session, "main.typ".into()).unwrap();
+        let handle = workspace.get(session).unwrap();
+        {
+            let mut guard = handle.lock().unwrap();
+            let main = guard.active_id();
+            guard.world().set_main(main);
+        }
+        assert_eq!(recompile(&workspace, session).unwrap().pages, 1);
+
+        // Switch the editor to the chapter; the main document stays compiled.
+        let opened = file(&workspace, session, "chapter.typ".into()).unwrap();
+        assert!(!opened.compiled, "the chapter is edited, not compiled");
+
+        let end = opened.text.encode_utf16().count();
+        edit(&workspace, session, end, end, "\n#pagebreak()\n".into()).unwrap();
+
+        let result = recompile(&workspace, session).unwrap();
+        assert_eq!(result.pages, 2, "the edit must reach the compiled document");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Diagnostics from another file carry its path, so the editor can point at
+    /// it instead of dropping the message.
+    #[test]
+    fn diagnostics_name_the_file_they_come_from() {
+        let root = project_dir(&[
+            ("main.typ", "#include \"broken.typ\"\n"),
+            ("broken.typ", "#(1 + \"a\")\n"),
+        ]);
+        let workspace = Workspace::new();
+        let session = workspace.create(root.clone());
+        project(&workspace, session, root.display().to_string()).unwrap();
+
+        file(&workspace, session, "main.typ".into()).unwrap();
+        let handle = workspace.get(session).unwrap();
+        {
+            let mut guard = handle.lock().unwrap();
+            let main = guard.active_id();
+            guard.world().set_main(main);
+        }
+
+        let result = recompile(&workspace, session).unwrap();
+        let diagnostic = result
+            .diagnostics
+            .iter()
+            .find(|d| d.error)
+            .expect("expected an error from the included file");
+
+        assert_eq!(diagnostic.file.as_deref(), Some("broken.typ"));
+        assert!(
+            diagnostic.from.is_none(),
+            "offsets belong to the edited document only"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Saving writes to disk; an external change is only pulled in when the
+    /// editor has nothing to lose.
+    #[test]
+    fn save_and_reload_respect_unsaved_edits() {
+        let root = project_dir(&[("doc.typ", "= One\n")]);
+        let workspace = Workspace::new();
+        let session = workspace.create(root.clone());
+        project(&workspace, session, root.display().to_string()).unwrap();
+        file(&workspace, session, "doc.typ".into()).unwrap();
+
+        edit(&workspace, session, 2, 5, "Two".into()).unwrap();
+        store(&workspace, session).unwrap();
+        assert_eq!(std::fs::read_to_string(root.join("doc.typ")).unwrap(), "= Two\n");
+
+        // An external change with no pending edits is picked up.
+        std::fs::write(root.join("doc.typ"), "= Three\n").unwrap();
+        let handle = workspace.get(session).unwrap();
+        {
+            let mut guard = handle.lock().unwrap();
+            assert!(guard.reload_active().unwrap());
+            let id = guard.active_id();
+            assert_eq!(guard.world_ref().source_text(id).unwrap(), "= Three\n");
+        }
+
+        // With pending edits it must refuse rather than discard them.
+        edit(&workspace, session, 2, 7, "Local".into()).unwrap();
+        std::fs::write(root.join("doc.typ"), "= Outside\n").unwrap();
+        {
+            let mut guard = handle.lock().unwrap();
+            assert!(!guard.reload_active().unwrap(), "unsaved edits must survive");
+            let id = guard.active_id();
+            assert_eq!(guard.world_ref().source_text(id).unwrap(), "= Local\n");
+        }
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// A missing session must be an error, not a panic.

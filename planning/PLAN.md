@@ -6,7 +6,7 @@ not start until the previous one works.
 
 ## Current state
 
-Done and verified (`cargo test`, 23/23; benchmark in step 3):
+Done and verified (`cargo test`, 29/29; benchmark in step 3):
 
 - `crates/core/src/world.rs` — `StudioWorld`: a `World` implementation on top of
   `typst-kit`. Open documents live in memory as `Source` objects that shadow the
@@ -20,7 +20,8 @@ Done and verified (`cargo test`, 23/23; benchmark in step 3):
 - `crates/core/examples/bench.rs` — latency measurements.
 - `src-tauri`, `ui` — the running application (step 5), interface in English
   and Russian, completion and hover from the compiler (step 7), and two-way
-  navigation between text and preview (step 8).
+  navigation between text and preview (step 8), and multi-file projects with
+  file watching (step 9).
 
 Environment: Rust 1.97.1 (upstream MSRV is 1.92), pinned to rev `35417aa76`.
 
@@ -197,19 +198,46 @@ needs the opener plugin.
 **Still to check by hand**: clicking a word in the preview moves the cursor to
 it, and moving the cursor marks the matching line in the preview.
 
-## Step 9. Project files
+## Step 9. Project files — done
 
-Tasks:
+The central change is that the **edited** document and the **compiled** document
+are now separate. Editing a chapter that another file includes has to keep the
+preview on the main document; without the split, clicking a file in the tree
+would silently redirect the preview to it.
 
-- Open a folder as a project, show a file tree.
-- Save (`Cmd+S`), unsaved-changes indicator.
-- `typst_kit::watcher::Watcher` for external changes: reload a file changed on
-  disk if it is not open; if it is open with unsaved edits, ask the user.
-- Multi-file documents mean diagnostics can point into files other than the one
-  on screen; today those are dropped. Show them against the right file.
+- `StudioWorld` holds several open documents, tracks which have unsaved changes,
+  writes them back with `save`, re-reads them with `reload`, lists project
+  sources with `project_files`, and reports `dependencies` for the watcher.
+- `Session` owns `active` (in the editor) beside the world's `main` (compiled).
+  All IDE queries and edits follow `active`; compilation follows `main`.
+- `Session::reload_active` refuses while the file has unsaved changes: dropping
+  the user's edits because something else touched the file is not an option.
+- Commands: `open_project`, `project_files`, `open_file`, `set_compiled`, `save`,
+  `is_dirty`, `reload`. Diagnostics now carry the path they come from; offsets
+  are still only produced for the file on screen, since that is the only one the
+  editor can underline.
+- `src-tauri/src/watch.rs` runs `typst_kit::watcher::Watcher` on a thread per
+  session and emits `files-changed`. It watches exactly what the last
+  compilation read, so an included file is watched and an unrelated one is not.
+- The UI gained a file list, an open-folder dialog (`tauri-plugin-dialog`),
+  `Cmd+S`, a modified indicator, a "preview this file" button, and a count of
+  diagnostics that point into other files.
 
-Criterion: `#include` of another project file works, and editing the included
-file updates the preview.
+Verified: 29 tests (19 core, 10 commands). The acceptance criterion is covered
+twice — `edits_to_an_included_file_reach_the_preview` in the core and
+`editing_an_include_updates_the_compiled_document` through the commands: editing
+an included chapter adds a page to the main document's preview.
+`save_and_reload_respect_unsaved_edits` covers the disk round trip in both
+directions. clippy and `tsc` clean; the app starts.
+
+Known rough edges: the watcher thread notices a closed session only after the
+next file system event, so it can linger briefly; it holds only an app handle.
+A file changed on disk while the editor has unsaved edits produces a warning in
+the status line — the user resolves it by saving, and there is no merge view.
+
+**Still to check by hand**: opening a folder lists its files, clicking one edits
+it while the preview stays on the main document, `Cmd+S` clears the modified
+mark, and an external edit refreshes the preview.
 
 ## Step 10. Export
 

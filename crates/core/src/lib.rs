@@ -11,10 +11,10 @@ pub use self::world::StudioWorld;
 pub use typst_ide::{Completion, CompletionKind, Tooltip};
 
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use typst::World;
-use typst::diag::{Severity, SourceDiagnostic, Warned};
+use typst::diag::{FileResult, Severity, SourceDiagnostic, Warned};
 use std::num::NonZeroUsize;
 
 use typst::introspection::PagedPosition;
@@ -39,6 +39,12 @@ pub struct Session {
     document: Option<PagedDocument>,
     /// How many sessions share the process-global memoization cache.
     peers: usize,
+    /// The document shown in the editor.
+    ///
+    /// Distinct from the compiled document: editing a chapter that another file
+    /// includes must keep the preview on that other file, not switch to the
+    /// chapter on its own.
+    active: FileId,
 }
 
 /// The outcome of one compilation.
@@ -90,7 +96,59 @@ pub struct Diagnostic {
 impl Session {
     /// Creates a session rooted at the given project directory.
     pub fn new(root: PathBuf) -> Self {
-        Self { world: StudioWorld::new(root), document: None, peers: 1 }
+        let world = StudioWorld::new(root);
+        let active = world.main_id();
+        Self { world, document: None, peers: 1, active }
+    }
+
+    /// Replaces the project, discarding open documents and compiled state.
+    pub fn open_project(&mut self, root: PathBuf) {
+        let peers = self.peers;
+        *self = Self::new(root);
+        self.peers = peers;
+    }
+
+    /// The document shown in the editor.
+    pub fn active_id(&self) -> FileId {
+        self.active
+    }
+
+    /// Chooses the document shown in the editor.
+    pub fn set_active(&mut self, id: FileId) {
+        self.active = id;
+    }
+
+    /// Opens a document and compiles it from now on.
+    ///
+    /// Pass `None` as the path for a document that has not been saved yet.
+    pub fn open(&mut self, path: Option<&Path>, text: String) -> FileResult<FileId> {
+        let id = self.world.open(path, text)?;
+        self.active = id;
+        Ok(id)
+    }
+
+    /// Opens a project file for editing, leaving the compiled document alone.
+    pub fn open_file(&mut self, relative: &str) -> FileResult<FileId> {
+        let id = self.world.open_from_disk(relative)?;
+        self.active = id;
+        Ok(id)
+    }
+
+    /// Re-reads the document in the editor from disk.
+    ///
+    /// Refuses while it has unsaved changes: silently dropping the user's edits
+    /// because something else touched the file would be unforgivable.
+    pub fn reload_active(&mut self) -> FileResult<bool> {
+        if self.world.is_dirty(self.active) {
+            return Ok(false);
+        }
+        self.world.reload(self.active)?;
+        Ok(true)
+    }
+
+    /// Writes a document back to disk.
+    pub fn save(&mut self, id: FileId) -> FileResult<()> {
+        self.world.save(id)
     }
 
     /// Records how many sessions share the cache, so eviction can compensate.
@@ -162,7 +220,7 @@ impl Session {
         cursor: usize,
         explicit: bool,
     ) -> Option<(usize, Vec<Completion>)> {
-        let source = self.main_source()?;
+        let source = self.active_source()?;
         // The previous document enriches the results: label completions, for
         // instance, only exist once something has been compiled.
         typst_ide::autocomplete(
@@ -176,7 +234,7 @@ impl Session {
 
     /// The tooltip for the cursor position, if any.
     pub fn tooltip(&self, cursor: usize) -> Option<Tooltip> {
-        let source = self.main_source()?;
+        let source = self.active_source()?;
         typst_ide::tooltip(
             &self.world,
             self.document.as_ref(),
@@ -219,7 +277,7 @@ impl Session {
         let Some(document) = self.document.as_ref() else {
             return Vec::new();
         };
-        let Some(source) = self.main_source() else {
+        let Some(source) = self.active_source() else {
             return Vec::new();
         };
 
@@ -239,8 +297,8 @@ impl Session {
         })
     }
 
-    fn main_source(&self) -> Option<Source> {
-        self.world.source(self.world.main_id()).ok()
+    fn active_source(&self) -> Option<Source> {
+        self.world.source(self.active).ok()
     }
 
     /// Renders one page of the current document to an SVG string.
@@ -308,7 +366,7 @@ mod tests {
 
     fn session(text: &str) -> Session {
         let mut session = Session::new(std::env::temp_dir());
-        session.world().open(None, text.into()).unwrap();
+        session.open(None, text.into()).unwrap();
         session
     }
 
@@ -514,6 +572,97 @@ mod tests {
         let session = session("Hello");
         assert!(session.jump_from_cursor(1).is_empty());
         assert!(session.jump_from_click(0, 0.5, 0.5).is_none());
+    }
+
+    /// Builds a throwaway project directory with the given files.
+    fn project(files: &[(&str, &str)]) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "typst-studio-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        for (name, content) in files {
+            let path = root.join(name);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(path, content).unwrap();
+        }
+        root
+    }
+
+    /// The step's acceptance criterion: an included file is compiled with the
+    /// main one, and editing the include updates the preview while the main
+    /// document stays the compiled one.
+    #[test]
+    fn edits_to_an_included_file_reach_the_preview() {
+        let root = project(&[
+            ("main.typ", "= Main\n\n#include \"chapter.typ\"\n"),
+            ("chapter.typ", "= Chapter\n"),
+        ]);
+        let mut session = Session::new(root.clone());
+
+        let main = session.open_file("main.typ").unwrap();
+        session.world().set_main(main);
+        assert!(session.preview().updated, "the project should compile");
+        assert_eq!(session.page_count(), 1);
+
+        // Switch the editor to the included file; the compiled document stays.
+        let chapter = session.open_file("chapter.typ").unwrap();
+        assert_eq!(session.active_id(), chapter);
+        assert_eq!(session.world_ref().main_id(), main);
+
+        // A page break in the chapter must show up in the preview of the main
+        // document.
+        let text = session.world_ref().source_text(chapter).unwrap();
+        session.world().edit(chapter, text.len()..text.len(), "\n#pagebreak()\n");
+
+        assert!(session.preview().updated);
+        assert_eq!(session.page_count(), 2, "the include must be recompiled");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Unsaved edits are tracked and cleared by saving, which is what the
+    /// modified indicator relies on.
+    #[test]
+    fn saving_writes_to_disk_and_clears_the_dirty_flag() {
+        let root = project(&[("doc.typ", "= Title\n")]);
+        let mut session = Session::new(root.clone());
+
+        let id = session.open_file("doc.typ").unwrap();
+        assert!(!session.world_ref().is_dirty(id));
+
+        session.world().edit(id, 2..7, "Changed");
+        assert!(session.world_ref().is_dirty(id), "an edit marks the file dirty");
+
+        session.save(id).unwrap();
+        assert!(!session.world_ref().is_dirty(id));
+        assert_eq!(
+            std::fs::read_to_string(root.join("doc.typ")).unwrap(),
+            "= Changed\n"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The file tree lists project sources and skips what is not one.
+    #[test]
+    fn lists_project_files() {
+        let root = project(&[
+            ("main.typ", ""),
+            ("parts/intro.typ", ""),
+            ("notes.txt", ""),
+            (".hidden/secret.typ", ""),
+        ]);
+        let session = Session::new(root.clone());
+
+        let files = session.world_ref().project_files();
+        assert_eq!(files, vec!["main.typ", "parts/intro.typ"]);
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// Editing must go through incremental reparsing, not a full reload.
