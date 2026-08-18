@@ -8,7 +8,9 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 use tauri::{Manager, State};
-use typst_studio_core::{SessionId, Workspace, byte_offset, utf16_offset};
+use typst_studio_core::{
+    CompletionKind, SessionId, Tooltip, Workspace, byte_offset, utf16_offset,
+};
 
 /// The result of one compilation, as the frontend sees it.
 #[derive(Debug, Serialize)]
@@ -32,6 +34,34 @@ pub struct Diagnostic {
     /// point into the document being edited.
     pub from: Option<usize>,
     pub to: Option<usize>,
+}
+
+/// Completions for one cursor position.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Completions {
+    /// Offset the completion replaces from, in UTF-16 code units.
+    pub from: usize,
+    pub items: Vec<CompletionItem>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionItem {
+    pub label: String,
+    /// Replacement text, possibly with `${placeholder}` snippet markers.
+    pub apply: Option<String>,
+    pub detail: Option<String>,
+    pub kind: &'static str,
+}
+
+/// A hover tooltip.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TooltipInfo {
+    pub text: String,
+    /// Whether the text is Typst code rather than prose.
+    pub code: bool,
 }
 
 type Response<T> = Result<T, String>;
@@ -156,6 +186,77 @@ pub(crate) fn recompile(
     })
 }
 
+/// Completions for the cursor position.
+#[tauri::command]
+pub fn complete(
+    workspace: State<Workspace>,
+    session: SessionId,
+    cursor: usize,
+    explicit: bool,
+) -> Response<Option<Completions>> {
+    completions(workspace.inner(), session, cursor, explicit)
+}
+
+pub(crate) fn completions(
+    workspace: &Workspace,
+    session: SessionId,
+    cursor: usize,
+    explicit: bool,
+) -> Response<Option<Completions>> {
+    let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
+    let session = handle.lock().map_err(lock_poisoned)?;
+    let Some(text) = main_text(&session) else {
+        return Ok(None);
+    };
+
+    let Some((from, items)) = session.complete(byte_offset(&text, cursor), explicit)
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(Completions {
+        from: utf16_offset(&text, from),
+        items: items
+            .into_iter()
+            .map(|item| CompletionItem {
+                label: item.label.into(),
+                apply: item.apply.map(Into::into),
+                detail: item.detail.map(Into::into),
+                kind: kind_name(&item.kind),
+            })
+            .collect(),
+    }))
+}
+
+/// The tooltip for the cursor position.
+#[tauri::command]
+pub fn tooltip(
+    workspace: State<Workspace>,
+    session: SessionId,
+    cursor: usize,
+) -> Response<Option<TooltipInfo>> {
+    hover(workspace.inner(), session, cursor)
+}
+
+pub(crate) fn hover(
+    workspace: &Workspace,
+    session: SessionId,
+    cursor: usize,
+) -> Response<Option<TooltipInfo>> {
+    let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
+    let session = handle.lock().map_err(lock_poisoned)?;
+    let Some(text) = main_text(&session) else {
+        return Ok(None);
+    };
+
+    Ok(session
+        .tooltip(byte_offset(&text, cursor))
+        .map(|tooltip| match tooltip {
+            Tooltip::Text(text) => TooltipInfo { text: text.into(), code: false },
+            Tooltip::Code(text) => TooltipInfo { text: text.into(), code: true },
+        }))
+}
+
 /// Renders one page to SVG.
 ///
 /// The frontend asks only for pages it is about to show: rendering the whole
@@ -181,6 +282,27 @@ pub fn open_window(app: tauri::AppHandle) -> Response<String> {
         .build()
         .map_err(|err| err.to_string())?;
     Ok(label)
+}
+
+/// The text of the document being edited, if one is open.
+fn main_text(session: &typst_studio_core::Session) -> Option<String> {
+    session.world_ref().source_text(session.world_ref().main_id())
+}
+
+/// A stable name for the completion kind, for the frontend to style by.
+fn kind_name(kind: &CompletionKind) -> &'static str {
+    match kind {
+        CompletionKind::Syntax => "syntax",
+        CompletionKind::Func => "func",
+        CompletionKind::Type => "type",
+        CompletionKind::Param => "param",
+        CompletionKind::Constant => "constant",
+        CompletionKind::Path => "path",
+        CompletionKind::Package => "package",
+        CompletionKind::Label => "label",
+        CompletionKind::Font => "font",
+        CompletionKind::Symbol(_) => "symbol",
+    }
 }
 
 fn no_session(session: SessionId) -> String {
@@ -240,6 +362,45 @@ mod tests {
         // offset been passed through unconverted, six Cyrillic characters would
         // have shifted this by six.
         assert_eq!(head, "Привет\n\n#(", "offset must land at the expression");
+    }
+
+    /// Completion offsets must be UTF-16 on both ends, or the editor replaces
+    /// the wrong span in a document with Cyrillic text.
+    #[test]
+    fn completion_offsets_are_utf16() {
+        let workspace = Workspace::new();
+        let session = workspace.create(std::env::temp_dir());
+
+        let text = "Привет\n\n#";
+        open(&workspace, session, None, text.into()).unwrap();
+        recompile(&workspace, session).unwrap();
+
+        let cursor = text.encode_utf16().count();
+        let result = completions(&workspace, session, cursor, false)
+            .unwrap()
+            .expect("expected completions");
+
+        assert_eq!(result.from, cursor, "completion starts at the cursor");
+        assert!(
+            result.items.iter().any(|item| item.label == "heading"),
+            "expected `heading` among {} items",
+            result.items.len()
+        );
+    }
+
+    /// Hovering a function name returns its documentation.
+    #[test]
+    fn tooltip_is_returned_for_a_function() {
+        let workspace = Workspace::new();
+        let session = workspace.create(std::env::temp_dir());
+
+        open(&workspace, session, None, "#heading[Title]".into()).unwrap();
+        recompile(&workspace, session).unwrap();
+
+        let tooltip = hover(&workspace, session, 4)
+            .unwrap()
+            .expect("expected a tooltip");
+        assert!(!tooltip.text.is_empty());
     }
 
     /// A missing session must be an error, not a panic.

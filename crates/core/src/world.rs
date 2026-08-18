@@ -3,9 +3,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
+use ecow::EcoString;
 use rustc_hash::FxHashMap;
 use typst::diag::{FileError, FileResult};
 use typst::foundations::{Bytes, Datetime, Duration};
+use typst::syntax::package::PackageSpec;
 use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
@@ -161,5 +163,21 @@ impl World for StudioWorld {
 
     fn today(&self, offset: Option<Duration>) -> Option<Datetime> {
         self.now.today(offset)
+    }
+}
+
+impl typst_ide::IdeWorld for StudioWorld {
+    fn upcast(&self) -> &dyn World {
+        self
+    }
+
+    fn packages(&self) -> &[(PackageSpec, Option<EcoString>)] {
+        // Populated once the Universe index is fetched in the background;
+        // until then import completions simply offer nothing.
+        &[]
+    }
+
+    fn files(&self) -> Vec<FileId> {
+        self.open.keys().copied().collect()
     }
 }

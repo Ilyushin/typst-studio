@@ -8,13 +8,14 @@ mod world;
 
 pub use self::workspace::{SessionId, Workspace};
 pub use self::world::StudioWorld;
+pub use typst_ide::{Completion, CompletionKind, Tooltip};
 
 use std::ops::Range;
 use std::path::PathBuf;
 
 use typst::World;
 use typst::diag::{Severity, SourceDiagnostic, Warned};
-use typst::syntax::{DiagSpanKind, FileId};
+use typst::syntax::{DiagSpanKind, FileId, Side, Source};
 use typst_layout::PagedDocument;
 use typst_svg::SvgOptions;
 
@@ -70,9 +71,14 @@ impl Session {
         self.peers = peers.max(1);
     }
 
-    /// Access to the underlying world, for IDE queries and file management.
+    /// Access to the underlying world, for file management.
     pub fn world(&mut self) -> &mut StudioWorld {
         &mut self.world
+    }
+
+    /// Read-only access to the world, for queries that do not mutate it.
+    pub fn world_ref(&self) -> &StudioWorld {
+        &self.world
     }
 
     /// The most recently compiled document, if there has been a successful
@@ -115,6 +121,44 @@ impl Session {
         }
 
         Preview { updated, diagnostics }
+    }
+
+    /// Completions for the cursor position, with the byte offset from which
+    /// the completion replaces text.
+    ///
+    /// `explicit` marks a completion the user asked for, as opposed to one
+    /// offered while typing. Cursor and returned offset are byte offsets.
+    pub fn complete(
+        &self,
+        cursor: usize,
+        explicit: bool,
+    ) -> Option<(usize, Vec<Completion>)> {
+        let source = self.main_source()?;
+        // The previous document enriches the results: label completions, for
+        // instance, only exist once something has been compiled.
+        typst_ide::autocomplete(
+            &self.world,
+            self.document.as_ref(),
+            &source,
+            cursor,
+            explicit,
+        )
+    }
+
+    /// The tooltip for the cursor position, if any.
+    pub fn tooltip(&self, cursor: usize) -> Option<Tooltip> {
+        let source = self.main_source()?;
+        typst_ide::tooltip(
+            &self.world,
+            self.document.as_ref(),
+            &source,
+            cursor,
+            Side::Before,
+        )
+    }
+
+    fn main_source(&self) -> Option<Source> {
+        self.world.source(self.world.main_id()).ok()
     }
 
     /// Renders one page of the current document to an SVG string.
@@ -267,6 +311,52 @@ mod tests {
         }
 
         assert_eq!(byte_offset("abc", 99), 3);
+    }
+
+    /// Typing `#` must offer the standard library.
+    #[test]
+    fn completes_standard_library_functions() {
+        let mut session = session("#");
+        session.preview();
+
+        let (from, completions) = session.complete(1, false).expect("expected completions");
+        assert_eq!(from, 1, "completion replaces from just after the hash");
+        assert!(
+            completions.iter().any(|c| c.label == "heading"),
+            "expected `heading` among {} completions",
+            completions.len()
+        );
+    }
+
+    /// Hovering a function name must show its documentation.
+    #[test]
+    fn shows_a_tooltip_for_a_known_function() {
+        let mut session = session("#heading[Title]");
+        session.preview();
+
+        // Cursor inside the word `heading`.
+        let tooltip = session.tooltip(4).expect("expected a tooltip");
+        let text = match tooltip {
+            Tooltip::Text(text) | Tooltip::Code(text) => text,
+        };
+        assert!(!text.is_empty(), "tooltip should carry documentation");
+    }
+
+    /// Label completions need the previous compilation, which is why the
+    /// session keeps it.
+    #[test]
+    fn completes_labels_from_the_compiled_document() {
+        let mut session = session("= Title <intro>\n\n@");
+        session.preview();
+
+        let id = session.world().main_id();
+        let cursor = session.world().source_text(id).unwrap().len();
+        let (_, completions) = session.complete(cursor, false).expect("expected completions");
+        assert!(
+            completions.iter().any(|c| c.label == "intro"),
+            "expected the `intro` label among {} completions",
+            completions.len()
+        );
     }
 
     /// Editing must go through incremental reparsing, not a full reload.

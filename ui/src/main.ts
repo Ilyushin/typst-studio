@@ -10,6 +10,7 @@ import {
 } from "@codemirror/lint";
 
 import { Backend, openWindow, type Diagnostic } from "./backend";
+import { ideExtensions } from "./ide";
 import { Preview } from "./preview";
 import { LANGUAGES, language, setLanguage, t, type Language } from "./i18n";
 import "./styles.css";
@@ -49,6 +50,7 @@ async function main(): Promise<void> {
         lintGutter(),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         EditorView.lineWrapping,
+        ...ideExtensions(backend, () => queue.then(() => undefined)),
         EditorView.updateListener.of((update) => {
           if (!update.docChanged) return;
 

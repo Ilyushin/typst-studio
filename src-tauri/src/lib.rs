@@ -18,6 +18,8 @@ pub fn run() {
             commands::apply_edit,
             commands::compile,
             commands::page_svg,
+            commands::complete,
+            commands::tooltip,
             commands::open_window,
         ])
         .run(tauri::generate_context!())

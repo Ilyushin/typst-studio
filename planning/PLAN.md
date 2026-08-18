@@ -6,7 +6,7 @@ not start until the previous one works.
 
 ## Current state
 
-Done and verified (`cargo test`, 12/12; benchmark in step 3):
+Done and verified (`cargo test`, 17/17; benchmark in step 3):
 
 - `crates/core/src/world.rs` — `StudioWorld`: a `World` implementation on top of
   `typst-kit`. Open documents live in memory as `Source` objects that shadow the
@@ -19,7 +19,7 @@ Done and verified (`cargo test`, 12/12; benchmark in step 3):
 - `crates/core/src/workspace.rs` — several windows, each with its own session.
 - `crates/core/examples/bench.rs` — latency measurements.
 - `src-tauri`, `ui` — the running application (step 5), interface in English
-  and Russian.
+  and Russian, with completion and hover from the compiler (step 7).
 
 Environment: Rust 1.97.1 (upstream MSRV is 1.92), pinned to rev `35417aa76`.
 
@@ -134,20 +134,34 @@ Tasks:
 Criterion: after ten seconds of continuous typing the preview catches up within
 one compilation cycle.
 
-## Step 7. IDE features
+## Step 7. IDE features — done
 
-Tasks:
+- `impl IdeWorld for StudioWorld`: `upcast()`, `files()` returns the open
+  documents for path completion, `packages()` is empty until step 11 fetches the
+  Universe index in the background.
+- `Session::complete(cursor, explicit)` and `Session::tooltip(cursor)`, both
+  passing the stored document — label completions (`@ref`) exist only once
+  something has been compiled, which is what step 4 was for.
+- Commands `complete` and `tooltip`, converting cursor and replacement offsets
+  between UTF-16 and bytes in both directions.
+- `ui/src/ide.ts` wires them into CodeMirror. Typst marks placeholders as
+  `${name}`, which is also CodeMirror's snippet syntax, so those completions
+  become real snippets with tab stops. Queries wait for the edit queue to drain,
+  otherwise a query could outrun the text it asks about.
+- `Session::world_ref()` added: the read-only queries cannot take the `&mut`
+  that `world()` hands out.
 
-- Implement `IdeWorld` for `StudioWorld`: `upcast()` is trivial, `packages()`
-  supplies package completions (an empty list is a fine start).
-- Commands `complete(cursor, explicit)` and `tooltip(cursor)`, passing the
-  document stored in step 4.
-- Wire into CodeMirror: completion popup, hover.
-- Completion and hover text comes from the compiler and is English-only; that is
-  upstream's data, not ours to translate. Our own labels stay localized.
+Verified: 17 tests (12 core, 5 commands). `completes_standard_library_functions`
+covers the `#` case, `completes_labels_from_the_compiled_document` covers labels,
+`completion_offsets_are_utf16` covers a completion after Cyrillic text, and
+tooltips are checked on both layers. clippy and `tsc` clean; the app starts.
 
-Criterion: typing `#` lists standard library functions; hovering `heading` shows
-its documentation.
+Note: completion and tooltip text comes from the compiler and is English only.
+That is upstream's documentation, not ours to translate; our own labels stay
+localized.
+
+**Still to check by hand**: the popup appears while typing `#`, Ctrl-Space
+forces it, hovering `heading` shows documentation.
 
 ## Step 8. Text and preview navigation
 

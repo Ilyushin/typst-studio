@@ -79,3 +79,17 @@ main {
   width: 100%;
   height: auto;
 }
+
+.typst-tooltip {
+  max-width: 420px;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.typst-tooltip.code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}

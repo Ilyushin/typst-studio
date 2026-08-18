@@ -10,6 +10,26 @@ export interface Diagnostic {
   to: number | null;
 }
 
+export interface CompletionItem {
+  label: string;
+  /** Replacement text, possibly carrying `${placeholder}` snippet markers. */
+  apply: string | null;
+  detail: string | null;
+  kind: string;
+}
+
+export interface Completions {
+  /** Offset the completion replaces from, in UTF-16 code units. */
+  from: number;
+  items: CompletionItem[];
+}
+
+export interface TooltipInfo {
+  text: string;
+  /** Whether the text is Typst code rather than prose. */
+  code: boolean;
+}
+
 export interface CompileResult {
   updated: boolean;
   pages: number;
@@ -35,6 +55,14 @@ export class Backend {
 
   compile(): Promise<CompileResult> {
     return invoke("compile", { session: this.session });
+  }
+
+  complete(cursor: number, explicit: boolean): Promise<Completions | null> {
+    return invoke("complete", { session: this.session, cursor, explicit });
+  }
+
+  tooltip(cursor: number): Promise<TooltipInfo | null> {
+    return invoke("tooltip", { session: this.session, cursor });
   }
 
   pageSvg(index: number): Promise<string | null> {
