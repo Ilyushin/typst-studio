@@ -1,0 +1,23 @@
+[package]
+name = "typst-studio-core"
+description = "Headless compilation core for the Typst Studio desktop client."
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+license = { workspace = true }
+
+[dependencies]
+typst = { workspace = true }
+typst-layout = { workspace = true }
+typst-svg = { workspace = true }
+typst-kit = { workspace = true, features = [
+    "embedded-fonts",
+    "scan-fonts",
+    "system-files",
+    "system-packages",
+    "universe-packages",
+    "system-downloader",
+    "datetime",
+] }
+ecow = { workspace = true }
+rustc-hash = { workspace = true }

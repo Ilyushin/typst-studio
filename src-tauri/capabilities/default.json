@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Core APIs the editor needs. Custom commands are always available.",
+  "windows": ["*"],
+  "permissions": ["core:default"]
+}

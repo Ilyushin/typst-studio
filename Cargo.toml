@@ -1,0 +1,27 @@
+[workspace]
+members = ["crates/core", "src-tauri"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "Apache-2.0"
+
+# Pinned to a specific upstream revision. Typst's internal APIs (`Routines`,
+# `World`, the `typst-kit` feature set) change between releases, so the pin is
+# updated deliberately, never implicitly.
+[workspace.dependencies]
+typst = { git = "https://github.com/typst/typst", rev = "35417aa769ab9d699a60384f91082b09bc6ba421" }
+typst-kit = { git = "https://github.com/typst/typst", rev = "35417aa769ab9d699a60384f91082b09bc6ba421", default-features = false }
+typst-layout = { git = "https://github.com/typst/typst", rev = "35417aa769ab9d699a60384f91082b09bc6ba421" }
+typst-svg = { git = "https://github.com/typst/typst", rev = "35417aa769ab9d699a60384f91082b09bc6ba421" }
+typst-render = { git = "https://github.com/typst/typst", rev = "35417aa769ab9d699a60384f91082b09bc6ba421" }
+typst-pdf = { git = "https://github.com/typst/typst", rev = "35417aa769ab9d699a60384f91082b09bc6ba421" }
+typst-ide = { git = "https://github.com/typst/typst", rev = "35417aa769ab9d699a60384f91082b09bc6ba421" }
+ecow = "0.2.6"
+serde = { version = "1", features = ["derive"] }
+rustc-hash = "2.1"
+
+[profile.dev.package."*"]
+opt-level = 2
