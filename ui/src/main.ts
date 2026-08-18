@@ -18,6 +18,9 @@ import "./styles.css";
 /** Compilation takes ~8 ms on a 49-page document, so the wait can be short. */
 const DEBOUNCE_MS = 40;
 
+/** Cursor moves are frequent; locating them in the preview can lag behind. */
+const CURSOR_DEBOUNCE_MS = 150;
+
 /** What the status line currently shows, so it can be redrawn on a language switch. */
 type Status =
   | { kind: "starting" }
@@ -32,12 +35,17 @@ async function main(): Promise<void> {
   const initial = t().sampleDocument;
   await backend.openDocument(initial);
 
-  const preview = new Preview(document.querySelector<HTMLElement>("#preview")!, backend);
+  const preview = new Preview(
+    document.querySelector<HTMLElement>("#preview")!,
+    backend,
+    (page, x, y) => void jumpToSource(page, x, y),
+  );
 
   // Edits are shipped to Rust one by one, in order. The queue keeps them from
   // interleaving with each other or with a compilation.
   let queue: Promise<unknown> = Promise.resolve();
   let timer: number | undefined;
+  let cursorTimer: number | undefined;
 
   const view = new EditorView({
     parent: document.querySelector<HTMLElement>("#editor")!,
@@ -52,6 +60,10 @@ async function main(): Promise<void> {
         EditorView.lineWrapping,
         ...ideExtensions(backend, () => queue.then(() => undefined)),
         EditorView.updateListener.of((update) => {
+          if (update.selectionSet || update.docChanged) {
+            window.clearTimeout(cursorTimer);
+            cursorTimer = window.setTimeout(locateCursor, CURSOR_DEBOUNCE_MS);
+          }
           if (!update.docChanged) return;
 
           // Apply from the end backwards, so earlier offsets stay valid.
@@ -86,6 +98,27 @@ async function main(): Promise<void> {
       );
     });
     await queue;
+  }
+
+  /** Shows where the cursor's text sits in the preview. */
+  async function locateCursor(): Promise<void> {
+    await queue;
+    const spots = await backend.jumpFromCursor(view.state.selection.main.head);
+    preview.highlight(spots[0]);
+  }
+
+  /** Moves the cursor to the text behind a click in the preview. */
+  async function jumpToSource(page: number, x: number, y: number): Promise<void> {
+    await queue;
+    const destination = await backend.jumpFromClick(page, x, y);
+    if (destination?.kind !== "cursor") return;
+
+    const offset = Math.min(destination.offset, view.state.doc.length);
+    view.dispatch({
+      selection: { anchor: offset },
+      scrollIntoView: true,
+    });
+    view.focus();
   }
 
   const labels = new Labels(status);

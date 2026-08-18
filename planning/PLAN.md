@@ -6,7 +6,7 @@ not start until the previous one works.
 
 ## Current state
 
-Done and verified (`cargo test`, 17/17; benchmark in step 3):
+Done and verified (`cargo test`, 23/23; benchmark in step 3):
 
 - `crates/core/src/world.rs` — `StudioWorld`: a `World` implementation on top of
   `typst-kit`. Open documents live in memory as `Source` objects that shadow the
@@ -19,7 +19,8 @@ Done and verified (`cargo test`, 17/17; benchmark in step 3):
 - `crates/core/src/workspace.rs` — several windows, each with its own session.
 - `crates/core/examples/bench.rs` — latency measurements.
 - `src-tauri`, `ui` — the running application (step 5), interface in English
-  and Russian, with completion and hover from the compiler (step 7).
+  and Russian, completion and hover from the compiler (step 7), and two-way
+  navigation between text and preview (step 8).
 
 Environment: Rust 1.97.1 (upstream MSRV is 1.92), pinned to rev `35417aa76`.
 
@@ -163,19 +164,38 @@ localized.
 **Still to check by hand**: the popup appears while typing `#`, Ctrl-Space
 forces it, hovering `heading` shows documentation.
 
-## Step 8. Text and preview navigation
+## Step 8. Text and preview navigation — done
 
-This is what separates a real editor from a text box next to a PDF.
+- `Session::jump_from_click(page, x, y)` and `Session::jump_from_cursor(cursor)`.
+  Coordinates are fractions of the page size, so neither the commands nor the
+  frontend deal in typographic units.
+- Commands `jump_from_click` and `jump_from_cursor`, converting cursor offsets
+  to UTF-16 on the way out. A click into another file returns `otherFile`; there
+  is nothing to show until step 9 can open files.
+- `ui/src/preview.ts` reports clicks as page fractions and draws a cursor marker;
+  `scrollIntoView({ block: "nearest" })` keeps the preview still when the spot is
+  already visible. `ui/src/main.ts` debounces cursor tracking at 150 ms — cursor
+  moves are far more frequent than edits.
 
-Tasks:
+Measured behaviour, worth knowing before designing on top of it:
 
-- `jump_from_cursor(document, source, cursor)` — highlight the spot in the
-  preview.
-- `jump_from_click` — clicking the preview moves the cursor in the source.
-- Optional scroll-follows-cursor, with a way to turn it off.
+- **Click resolution is per character.** Clicking along a rendered line yields
+  offsets that grow left to right, landing inside the clicked word.
+- **Cursor resolution is per line.** `jump_from_cursor` returns the start of the
+  rendered text run, so every cursor position within one line maps to the same
+  spot. That is what upstream resolves, and it matches forward search in LaTeX
+  editors. The marker is therefore line-grained by design, not by oversight.
 
-Criterion: clicking a word in the preview puts the cursor on that word in the
-editor, and the reverse.
+Verified: 23 tests (16 core, 7 commands). `click_maps_to_the_character_under_it`
+scans the rendered line rather than hard-coding coordinates, which depend on font
+metrics; `click_returns_utf16_cursor_offsets` covers Cyrillic text. clippy and
+`tsc` clean; the app starts.
+
+Not handled yet: `Jump::Url` is resolved but ignored, since opening a browser
+needs the opener plugin.
+
+**Still to check by hand**: clicking a word in the preview moves the cursor to
+it, and moving the cursor marks the matching line in the preview.
 
 ## Step 9. Project files
 

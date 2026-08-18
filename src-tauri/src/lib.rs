@@ -20,6 +20,8 @@ pub fn run() {
             commands::page_svg,
             commands::complete,
             commands::tooltip,
+            commands::jump_from_click,
+            commands::jump_from_cursor,
             commands::open_window,
         ])
         .run(tauri::generate_context!())

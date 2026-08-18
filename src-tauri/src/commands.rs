@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use serde::Serialize;
 use tauri::{Manager, State};
 use typst_studio_core::{
-    CompletionKind, SessionId, Tooltip, Workspace, byte_offset, utf16_offset,
+    CompletionKind, DocPosition, Jump, SessionId, Tooltip, Workspace, byte_offset,
+    utf16_offset,
 };
 
 /// The result of one compilation, as the frontend sees it.
@@ -62,6 +63,27 @@ pub struct TooltipInfo {
     pub text: String,
     /// Whether the text is Typst code rather than prose.
     pub code: bool,
+}
+
+/// A spot in the rendered document, in fractions of the page size.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Spot {
+    pub page: usize,
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Where a click in the preview leads.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Destination {
+    /// A cursor offset in the edited document, in UTF-16 code units.
+    Cursor { offset: usize },
+    /// A spot in another file, which cannot be shown until step 9 opens files.
+    OtherFile,
+    Url { url: String },
+    Spot(Spot),
 }
 
 type Response<T> = Result<T, String>;
@@ -257,6 +279,70 @@ pub(crate) fn hover(
         }))
 }
 
+/// Resolves a click in the preview.
+///
+/// `x` and `y` are fractions of the page size, so the frontend does not have to
+/// know about typographic units.
+#[tauri::command]
+pub fn jump_from_click(
+    workspace: State<Workspace>,
+    session: SessionId,
+    page: usize,
+    x: f64,
+    y: f64,
+) -> Response<Option<Destination>> {
+    click(workspace.inner(), session, page, x, y)
+}
+
+pub(crate) fn click(
+    workspace: &Workspace,
+    session: SessionId,
+    page: usize,
+    x: f64,
+    y: f64,
+) -> Response<Option<Destination>> {
+    let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
+    let session = handle.lock().map_err(lock_poisoned)?;
+
+    Ok(session.jump_from_click(page, x, y).map(|jump| match jump {
+        Jump::Source { file, offset } if file == session.world_ref().main_id() => {
+            let text = main_text(&session).unwrap_or_default();
+            Destination::Cursor { offset: utf16_offset(&text, offset) }
+        }
+        Jump::Source { .. } => Destination::OtherFile,
+        Jump::Url(url) => Destination::Url { url },
+        Jump::Position(position) => Destination::Spot(spot(position)),
+    }))
+}
+
+/// Where the cursor's text sits in the rendered document.
+#[tauri::command]
+pub fn jump_from_cursor(
+    workspace: State<Workspace>,
+    session: SessionId,
+    cursor: usize,
+) -> Response<Vec<Spot>> {
+    cursor_spots(workspace.inner(), session, cursor)
+}
+
+pub(crate) fn cursor_spots(
+    workspace: &Workspace,
+    session: SessionId,
+    cursor: usize,
+) -> Response<Vec<Spot>> {
+    let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
+    let session = handle.lock().map_err(lock_poisoned)?;
+    let Some(text) = main_text(&session) else {
+        return Ok(Vec::new());
+    };
+
+    Ok(session
+        .jump_from_cursor(byte_offset(&text, cursor))
+        .into_iter()
+        .map(spot)
+        .collect())
+}
+
 /// Renders one page to SVG.
 ///
 /// The frontend asks only for pages it is about to show: rendering the whole
@@ -287,6 +373,10 @@ pub fn open_window(app: tauri::AppHandle) -> Response<String> {
 /// The text of the document being edited, if one is open.
 fn main_text(session: &typst_studio_core::Session) -> Option<String> {
     session.world_ref().source_text(session.world_ref().main_id())
+}
+
+fn spot(position: DocPosition) -> Spot {
+    Spot { page: position.page, x: position.x, y: position.y }
 }
 
 /// A stable name for the completion kind, for the frontend to style by.
@@ -401,6 +491,54 @@ mod tests {
             .unwrap()
             .expect("expected a tooltip");
         assert!(!tooltip.text.is_empty());
+    }
+
+    /// A click must come back as a UTF-16 cursor offset, not a byte offset.
+    #[test]
+    fn click_returns_utf16_cursor_offsets() {
+        let workspace = Workspace::new();
+        let session = workspace.create(std::env::temp_dir());
+
+        // Cyrillic ahead of the target word makes byte and UTF-16 offsets differ.
+        let text = "Привет замечательный мир";
+        open(&workspace, session, None, text.into()).unwrap();
+        recompile(&workspace, session).unwrap();
+
+        let utf16_len = text.encode_utf16().count();
+        let mut offsets = Vec::new();
+        for yi in 0..40 {
+            let y = 0.08 + f64::from(yi) * 0.001;
+            for xi in 0..40 {
+                let x = 0.10 + f64::from(xi) * 0.01;
+                if let Some(Destination::Cursor { offset }) =
+                    click(&workspace, session, 0, x, y).unwrap()
+                {
+                    offsets.push(offset);
+                }
+            }
+        }
+
+        assert!(!offsets.is_empty(), "the rendered line should be clickable");
+        assert!(
+            offsets.iter().all(|&offset| offset <= utf16_len),
+            "offsets must be UTF-16 and stay within the document ({utf16_len} units): {:?}",
+            offsets.iter().max()
+        );
+    }
+
+    /// The cursor maps to a spot on the page, in page fractions.
+    #[test]
+    fn cursor_maps_to_a_spot_on_the_page() {
+        let workspace = Workspace::new();
+        let session = workspace.create(std::env::temp_dir());
+
+        open(&workspace, session, None, "Привет мир".into()).unwrap();
+        recompile(&workspace, session).unwrap();
+
+        let spots = cursor_spots(&workspace, session, 8).unwrap();
+        let spot = spots.first().expect("cursor should map into the document");
+        assert_eq!(spot.page, 0);
+        assert!((0.0..=1.0).contains(&spot.x) && (0.0..=1.0).contains(&spot.y));
     }
 
     /// A missing session must be an error, not a panic.

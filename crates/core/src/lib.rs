@@ -15,6 +15,10 @@ use std::path::PathBuf;
 
 use typst::World;
 use typst::diag::{Severity, SourceDiagnostic, Warned};
+use std::num::NonZeroUsize;
+
+use typst::introspection::PagedPosition;
+use typst::layout::Point;
 use typst::syntax::{DiagSpanKind, FileId, Side, Source};
 use typst_layout::PagedDocument;
 use typst_svg::SvgOptions;
@@ -46,6 +50,31 @@ pub struct Preview {
     pub updated: bool,
     /// Errors and warnings, ready to be shown in the editor gutter.
     pub diagnostics: Vec<Diagnostic>,
+}
+
+/// A spot in the rendered document.
+///
+/// Coordinates are fractions of the page size rather than typographic units,
+/// so the UI can place them without knowing anything about points.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DocPosition {
+    /// Zero-based page index.
+    pub page: usize,
+    /// Horizontal position, 0 at the left edge and 1 at the right.
+    pub x: f64,
+    /// Vertical position, 0 at the top edge and 1 at the bottom.
+    pub y: f64,
+}
+
+/// Where a click in the preview leads.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Jump {
+    /// A byte offset in a source file.
+    Source { file: FileId, offset: usize },
+    /// An external link.
+    Url(String),
+    /// Another spot in the same document.
+    Position(DocPosition),
 }
 
 /// A diagnostic resolved to a byte range in a concrete file.
@@ -155,6 +184,59 @@ impl Session {
             cursor,
             Side::Before,
         )
+    }
+
+    /// Resolves a click in the preview.
+    ///
+    /// `x` and `y` are fractions of the page size, as in [`DocPosition`].
+    pub fn jump_from_click(&self, page: usize, x: f64, y: f64) -> Option<Jump> {
+        let document = self.document.as_ref()?;
+        let size = document.pages().get(page)?.frame.size();
+        let position = PagedPosition {
+            page: NonZeroUsize::new(page + 1)?,
+            point: Point::new(size.x * x, size.y * y),
+        };
+
+        match typst_ide::jump_from_click(&self.world, document, &position)? {
+            typst_ide::Jump::File(file, offset) => Some(Jump::Source { file, offset }),
+            typst_ide::Jump::Url(url) => Some(Jump::Url(url.to_string())),
+            typst_ide::Jump::Position(position) => {
+                Some(Jump::Position(self.to_doc_position(position)?))
+            }
+        }
+    }
+
+    /// Where the cursor's text appears in the rendered document.
+    ///
+    /// Positions land at the start of the rendered text run — in practice the
+    /// line — not at the exact character, so every cursor within one line maps
+    /// to the same spot. That is the granularity upstream offers, and it is the
+    /// same granularity as forward search in LaTeX editors.
+    ///
+    /// A single cursor position can map to several spots — a heading repeated
+    /// in an outline, for instance.
+    pub fn jump_from_cursor(&self, cursor: usize) -> Vec<DocPosition> {
+        let Some(document) = self.document.as_ref() else {
+            return Vec::new();
+        };
+        let Some(source) = self.main_source() else {
+            return Vec::new();
+        };
+
+        typst_ide::jump_from_cursor(document, &source, cursor)
+            .into_iter()
+            .filter_map(|position| self.to_doc_position(position))
+            .collect()
+    }
+
+    fn to_doc_position(&self, position: PagedPosition) -> Option<DocPosition> {
+        let page = position.page.get() - 1;
+        let size = self.document.as_ref()?.pages().get(page)?.frame.size();
+        Some(DocPosition {
+            page,
+            x: position.point.x / size.x,
+            y: position.point.y / size.y,
+        })
     }
 
     fn main_source(&self) -> Option<Source> {
@@ -357,6 +439,81 @@ mod tests {
             "expected the `intro` label among {} completions",
             completions.len()
         );
+    }
+
+    /// The cursor must map to a spot in the rendered document.
+    #[test]
+    fn finds_the_cursor_in_the_document() {
+        let mut session = session("Hello wonderful world");
+        session.preview();
+
+        // Cursor inside the word `wonderful`.
+        let positions = session.jump_from_cursor(8);
+        let position = positions.first().expect("cursor should map into the document");
+
+        assert_eq!(position.page, 0);
+        assert!(
+            (0.0..=1.0).contains(&position.x) && (0.0..=1.0).contains(&position.y),
+            "fractions must stay on the page: {position:?}"
+        );
+    }
+
+    /// Clicking maps to the character under the pointer, which is what makes
+    /// click-to-jump usable. Scans the rendered line rather than hard-coding
+    /// coordinates, which depend on font metrics.
+    #[test]
+    fn click_maps_to_the_character_under_it() {
+        let text = "Hello wonderful world";
+        let mut session = session(text);
+        session.preview();
+
+        let mut hits: Vec<(f64, usize)> = Vec::new();
+        for yi in 0..40 {
+            let y = 0.08 + f64::from(yi) * 0.001;
+            for xi in 0..40 {
+                let x = 0.10 + f64::from(xi) * 0.01;
+                if let Some(Jump::Source { offset, .. }) = session.jump_from_click(0, x, y)
+                {
+                    hits.push((x, offset));
+                }
+            }
+        }
+
+        assert!(!hits.is_empty(), "the rendered line should be clickable");
+
+        let word = text.find("wonderful").unwrap()..text.find("wonderful").unwrap() + 9;
+        assert!(
+            hits.iter().any(|(_, offset)| word.contains(offset)),
+            "some click should land inside `wonderful`"
+        );
+
+        // Offsets must grow left to right, or the mapping is not positional.
+        let leftmost = hits.iter().min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
+        let rightmost = hits.iter().max_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
+        assert!(
+            leftmost.1 < rightmost.1,
+            "offset should increase along the line: {leftmost:?} vs {rightmost:?}"
+        );
+    }
+
+    /// Clicking empty space must not invent a destination.
+    #[test]
+    fn click_on_blank_space_leads_nowhere() {
+        let mut session = session("Short text");
+        session.preview();
+
+        // Bottom right corner of the page, far below the single line of text.
+        assert!(session.jump_from_click(0, 0.95, 0.95).is_none());
+        // Outside the document entirely.
+        assert!(session.jump_from_click(9, 0.5, 0.5).is_none());
+    }
+
+    /// Without a compiled document there is nothing to navigate.
+    #[test]
+    fn navigation_needs_a_document() {
+        let session = session("Hello");
+        assert!(session.jump_from_cursor(1).is_empty());
+        assert!(session.jump_from_click(0, 0.5, 0.5).is_none());
     }
 
     /// Editing must go through incremental reparsing, not a full reload.

@@ -6,19 +6,27 @@
  * they are still visible.
  */
 
-import type { Backend } from "./backend";
+import type { Backend, Spot } from "./backend";
+
+/** Called when the user clicks a spot in the preview. */
+export type ClickHandler = (page: number, x: number, y: number) => void;
 
 export class Preview {
   private readonly observer: IntersectionObserver;
   private readonly visible = new Set<HTMLElement>();
+  private readonly marker = document.createElement("div");
   private pages: HTMLElement[] = [];
+  /** The page the cursor marker belongs to, so a re-render can restore it. */
+  private marked: HTMLElement | undefined;
   /** Bumped on every recompilation to discard stale renders. */
   private generation = 0;
 
   constructor(
     private readonly container: HTMLElement,
     private readonly backend: Backend,
+    private readonly onClick: ClickHandler,
   ) {
+    this.marker.className = "cursor-marker";
     this.observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
@@ -48,15 +56,49 @@ export class Preview {
 
     this.observer.disconnect();
     this.visible.clear();
+    this.marked = undefined;
     this.container.replaceChildren();
     this.pages = Array.from({ length: count }, (_, index) => {
       const page = document.createElement("div");
       page.className = "page";
       page.dataset.index = String(index);
+      page.addEventListener("click", (event) => this.click(page, event));
       this.container.append(page);
       this.observer.observe(page);
       return page;
     });
+  }
+
+  /** Marks where the editor cursor appears, scrolling it into view if needed. */
+  highlight(spot: Spot | undefined): void {
+    if (!spot) {
+      this.marker.remove();
+      this.marked = undefined;
+      return;
+    }
+
+    const page = this.pages[spot.page];
+    if (!page) return;
+    this.marked = page;
+
+    this.marker.style.left = `${spot.x * 100}%`;
+    this.marker.style.top = `${spot.y * 100}%`;
+    page.append(this.marker);
+
+    // `nearest` leaves the view alone when the spot is already visible, so the
+    // preview does not jump around while the user moves the cursor.
+    this.marker.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+
+  private click(page: HTMLElement, event: MouseEvent): void {
+    const rect = page.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+
+    this.onClick(
+      Number(page.dataset.index),
+      (event.clientX - rect.left) / rect.width,
+      (event.clientY - rect.top) / rect.height,
+    );
   }
 
   private async render(page: HTMLElement): Promise<void> {
@@ -68,6 +110,10 @@ export class Preview {
 
     // A newer compilation finished while this render was in flight.
     if (generation !== this.generation) return;
-    if (svg !== null) page.innerHTML = svg;
+    if (svg === null) return;
+
+    page.innerHTML = svg;
+    // Replacing the content dropped the marker; put it back where it belongs.
+    if (this.marked === page) page.append(this.marker);
   }
 }

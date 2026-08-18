@@ -30,6 +30,20 @@ export interface TooltipInfo {
   code: boolean;
 }
 
+/** A spot in the rendered document, in fractions of the page size. */
+export interface Spot {
+  page: number;
+  x: number;
+  y: number;
+}
+
+/** Where a click in the preview leads. */
+export type Destination =
+  | { kind: "cursor"; offset: number }
+  | { kind: "otherFile" }
+  | { kind: "url"; url: string }
+  | ({ kind: "spot" } & Spot);
+
 export interface CompileResult {
   updated: boolean;
   pages: number;
@@ -63,6 +77,14 @@ export class Backend {
 
   tooltip(cursor: number): Promise<TooltipInfo | null> {
     return invoke("tooltip", { session: this.session, cursor });
+  }
+
+  jumpFromClick(page: number, x: number, y: number): Promise<Destination | null> {
+    return invoke("jump_from_click", { session: this.session, page, x, y });
+  }
+
+  jumpFromCursor(cursor: number): Promise<Spot[]> {
+    return invoke("jump_from_cursor", { session: this.session, cursor });
   }
 
   pageSvg(index: number): Promise<string | null> {
