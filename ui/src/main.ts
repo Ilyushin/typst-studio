@@ -9,7 +9,7 @@ import {
   type Diagnostic as LintDiagnostic,
 } from "@codemirror/lint";
 import { listen } from "@tauri-apps/api/event";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 
 import { Backend, openWindow, type Diagnostic } from "./backend";
 import { FileList } from "./files";
@@ -187,6 +187,29 @@ async function main(): Promise<void> {
     await recompile();
   }
 
+  /** Writes the compiled document to a file the user picks. */
+  async function exportDocument(): Promise<void> {
+    const suggested = (compiledPath ?? "document.typ").replace(/\.typ$/, ".pdf");
+    const target = await saveDialog({
+      defaultPath: suggested,
+      filters: [
+        { name: "PDF", extensions: ["pdf"] },
+        { name: "PNG", extensions: ["png"] },
+        { name: "SVG", extensions: ["svg"] },
+      ],
+    });
+    if (typeof target !== "string") return;
+
+    await queue;
+    try {
+      // PNG holds a single page, so export the one the user is looking at.
+      await backend.export(target, preview.topPage());
+      status.set({ kind: "warning", text: t().exported(target) });
+    } catch (error: unknown) {
+      status.set({ kind: "warning", text: t().exportFailed(String(error)) });
+    }
+  }
+
   async function saveActive(): Promise<void> {
     await queue;
     await backend.save();
@@ -238,6 +261,7 @@ async function main(): Promise<void> {
     onOpenProject: () => void chooseProject(),
     onSave: () => void saveActive(),
     onPreviewActive: () => void previewActive(),
+    onExport: () => void exportDocument(),
   });
   labels.apply();
 
@@ -296,6 +320,7 @@ interface Chrome {
   onOpenProject(): void;
   onSave(): void;
   onPreviewActive(): void;
+  onExport(): void;
 }
 
 /** Applies translations to the static chrome and drives its buttons. */
@@ -306,6 +331,7 @@ class Labels {
   private readonly save = document.querySelector<HTMLButtonElement>("#save")!;
   private readonly previewThis =
     document.querySelector<HTMLButtonElement>("#preview-this")!;
+  private readonly exportButton = document.querySelector<HTMLButtonElement>("#export")!;
   private readonly fileStatus = document.querySelector<HTMLElement>("#file-status")!;
   private readonly picker = document.querySelector<HTMLSelectElement>("#language")!;
 
@@ -333,6 +359,7 @@ class Labels {
     this.openProject.addEventListener("click", () => chrome.onOpenProject());
     this.save.addEventListener("click", () => chrome.onSave());
     this.previewThis.addEventListener("click", () => chrome.onPreviewActive());
+    this.exportButton.addEventListener("click", () => chrome.onExport());
   }
 
   apply(): void {
@@ -344,6 +371,7 @@ class Labels {
     this.openProject.textContent = strings.openProject;
     this.save.textContent = strings.save;
     this.previewThis.textContent = strings.compileThis;
+    this.exportButton.textContent = strings.export;
 
     const path = this.chrome.path();
     this.fileStatus.textContent =

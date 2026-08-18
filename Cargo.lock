@@ -856,7 +856,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1060,7 +1060,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1146,6 +1146,9 @@ name = "float-cmp"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98de4bbd547a563b716d8dfa9aad1cb19bfab00f4fa09a6a4ed21dbcf44ce9c4"
+dependencies = [
+ "num-traits",
+]
 
 [[package]]
 name = "fnv"
@@ -1164,6 +1167,15 @@ name = "font-types"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b38ad915f6dadd993ced50848a8291a543bd41ca62bc10740d5e64e2ab4cfd7"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
+name = "font-types"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75382bc7392ef10aad10935f92fc3db36d2d4dad0e5d96d8d65e04f89a07ec39"
 dependencies = [
  "bytemuck",
 ]
@@ -1571,7 +1583,7 @@ dependencies = [
  "log",
  "peniko",
  "png 0.18.1",
- "skrifa",
+ "skrifa 0.42.1",
  "smallvec",
  "vello_common",
 ]
@@ -1666,6 +1678,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "harfrust"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c03d949a14aa089bbb282f7dd76a498a7f684428e4257202efc119ec010376f9"
+dependencies = [
+ "bitflags 2.13.1",
+ "bytemuck",
+ "read-fonts 0.41.0",
+ "smallvec",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1743,7 +1767,7 @@ dependencies = [
  "phf",
  "rustc-hash",
  "siphasher",
- "skrifa",
+ "skrifa 0.42.1",
  "smallvec",
  "yoke",
 ]
@@ -1797,6 +1821,17 @@ dependencies = [
  "rustc-hash",
  "smallvec",
  "zune-jpeg",
+]
+
+[[package]]
+name = "hayro-write"
+version = "0.7.0"
+source = "git+https://github.com/LaurenzV/hayro?rev=d8e24e29eda62581e1ea15497effb2a884fb1608#d8e24e29eda62581e1ea15497effb2a884fb1608"
+dependencies = [
+ "flate2",
+ "hayro-syntax",
+ "pdf-writer",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -2462,6 +2497,52 @@ checksum = "07293a4e297ac234359b510362495713f75ea345d5307140414f20c69ffeb087"
 dependencies = [
  "bitflags 2.13.1",
  "libc",
+]
+
+[[package]]
+name = "krilla"
+version = "0.8.2"
+source = "git+https://github.com/LaurenzV/krilla?rev=7772dbe#7772dbee5ba576b7b7afe2c59cbe4c2fefe7ce9c"
+dependencies = [
+ "base64 0.22.1",
+ "bumpalo",
+ "comemo",
+ "crc32fast",
+ "flate2",
+ "float-cmp",
+ "gif",
+ "harfrust",
+ "hayro-write",
+ "image-webp",
+ "imagesize",
+ "indexmap 2.14.0",
+ "pdf-writer",
+ "png 0.18.1",
+ "rayon",
+ "rustc-hash",
+ "siphasher",
+ "skrifa 0.44.0",
+ "smallvec",
+ "subsetter",
+ "tiny-skia-path",
+ "xmp-writer",
+ "yoke",
+ "zune-jpeg",
+]
+
+[[package]]
+name = "krilla-svg"
+version = "0.8.1"
+source = "git+https://github.com/LaurenzV/krilla?rev=7772dbe#7772dbee5ba576b7b7afe2c59cbe4c2fefe7ce9c"
+dependencies = [
+ "flate2",
+ "fontdb",
+ "krilla",
+ "resvg",
+ "skrifa 0.44.0",
+ "smallvec",
+ "tiny-skia",
+ "usvg",
 ]
 
 [[package]]
@@ -3170,6 +3251,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
+name = "pdf-writer"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5e456864a7a304047bff84977dc6fb162bd956475d40ba50b2dcecaada7f753"
+dependencies = [
+ "bitflags 2.13.1",
+ "itoa",
+ "memchr",
+ "ryu",
+]
+
+[[package]]
 name = "peniko"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3262,6 +3355,15 @@ name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+
+[[package]]
+name = "pixglyph"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47945e80a49d08350e4a007ac4294c6498d23956c18ea5e6ff480dc93d31643c"
+dependencies = [
+ "ttf-parser",
+]
 
 [[package]]
 name = "pkg-config"
@@ -3561,7 +3663,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4ed38b89c2c77ff968c524145ad65fb010f38af5c7a224b53b81d47ac2daa81"
 dependencies = [
  "bytemuck",
- "font-types",
+ "font-types 0.11.3",
+]
+
+[[package]]
+name = "read-fonts"
+version = "0.41.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "046a7d674daf459825b32f5062056d6882db0d2f5a479fbd76ccfc870ac18709"
+dependencies = [
+ "bytemuck",
+ "font-types 0.12.3",
+ "once_cell",
 ]
 
 [[package]]
@@ -3668,6 +3781,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "resvg"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9be183ad6a216aa96f33e4c8033b0988b8b3ea6fd2359d19af5bac4643fd8e81"
+dependencies = [
+ "gif",
+ "image-webp",
+ "log",
+ "pico-args",
+ "rgb",
+ "svgtypes",
+ "tiny-skia",
+ "usvg",
+ "zune-jpeg",
+]
+
+[[package]]
 name = "rfd"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3689,6 +3819,15 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "rgb"
+version = "0.8.53"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
+dependencies = [
+ "bytemuck",
 ]
 
 [[package]]
@@ -3747,7 +3886,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4135,7 +4274,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c34617370ae968efb7161bb2beb517d9084659aae19e24b89e3db25b46e4564"
 dependencies = [
  "bytemuck",
- "read-fonts",
+ "read-fonts 0.39.2",
+]
+
+[[package]]
+name = "skrifa"
+version = "0.44.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "819ab7d62b1d3e72d9d9dea5650bac30424f9111364bb94928dbf5ecad1baa68"
+dependencies = [
+ "bytemuck",
+ "read-fonts 0.41.0",
 ]
 
 [[package]]
@@ -4300,6 +4449,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "subsetter"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38803281d1c23166c5ebcb455439a5d2afe711cc909cf88af72448c297756ad6"
+dependencies = [
+ "kurbo",
+ "rustc-hash",
+ "skrifa 0.42.1",
+ "write-fonts",
 ]
 
 [[package]]
@@ -4755,10 +4916,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4844,6 +5005,21 @@ checksum = "7e689342a48d2ea927c87ea50cabf8594854bf940e9310208848d680d668ed85"
 dependencies = [
  "num-conv",
  "time-core",
+]
+
+[[package]]
+name = "tiny-skia"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47ffee5eaaf5527f630fb0e356b90ebdec84d5d18d937c5e440350f88c5a91ea"
+dependencies = [
+ "arrayref",
+ "arrayvec",
+ "bytemuck",
+ "cfg-if",
+ "log",
+ "png 0.18.1",
+ "tiny-skia-path",
 ]
 
 [[package]]
@@ -5410,6 +5586,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "typst-pdf"
+version = "0.15.1"
+source = "git+https://github.com/typst/typst?rev=35417aa769ab9d699a60384f91082b09bc6ba421#35417aa769ab9d699a60384f91082b09bc6ba421"
+dependencies = [
+ "az",
+ "bytemuck",
+ "codex",
+ "comemo",
+ "ecow",
+ "flate2",
+ "image",
+ "indexmap 2.14.0",
+ "infer",
+ "krilla",
+ "krilla-svg",
+ "rustc-hash",
+ "serde",
+ "smallvec",
+ "typst-assets",
+ "typst-layout",
+ "typst-library",
+ "typst-macros",
+ "typst-syntax",
+ "typst-timing",
+ "typst-utils",
+]
+
+[[package]]
 name = "typst-realize"
 version = "0.15.1"
 source = "git+https://github.com/typst/typst?rev=35417aa769ab9d699a60384f91082b09bc6ba421#35417aa769ab9d699a60384f91082b09bc6ba421"
@@ -5423,6 +5627,28 @@ dependencies = [
  "typst-library",
  "typst-macros",
  "typst-syntax",
+ "typst-timing",
+ "typst-utils",
+]
+
+[[package]]
+name = "typst-render"
+version = "0.15.1"
+source = "git+https://github.com/typst/typst?rev=35417aa769ab9d699a60384f91082b09bc6ba421#35417aa769ab9d699a60384f91082b09bc6ba421"
+dependencies = [
+ "bytemuck",
+ "comemo",
+ "hayro",
+ "image",
+ "libm",
+ "pixglyph",
+ "resvg",
+ "tiny-skia",
+ "ttf-parser",
+ "typst-assets",
+ "typst-layout",
+ "typst-library",
+ "typst-macros",
  "typst-timing",
  "typst-utils",
 ]
@@ -5450,6 +5676,8 @@ dependencies = [
  "typst-ide",
  "typst-kit",
  "typst-layout",
+ "typst-pdf",
+ "typst-render",
  "typst-svg",
 ]
 
@@ -6121,7 +6349,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6537,6 +6765,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
+name = "write-fonts"
+version = "0.48.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb731d4c4d93eacc69a1ad2f270f905788a98e4a3438267bcafbe08d3431c8d8"
+dependencies = [
+ "font-types 0.11.3",
+ "indexmap 2.14.0",
+ "kurbo",
+ "log",
+ "read-fonts 0.39.2",
+]
+
+[[package]]
 name = "write16"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6628,6 +6869,12 @@ name = "xmlwriter"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
+
+[[package]]
+name = "xmp-writer"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 
 [[package]]
 name = "yaml-rust"

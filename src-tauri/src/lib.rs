@@ -23,6 +23,7 @@ pub fn run() {
             commands::save,
             commands::is_dirty,
             commands::reload,
+            commands::export,
             commands::open_document,
             commands::apply_edit,
             commands::compile,

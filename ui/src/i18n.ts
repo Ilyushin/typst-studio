@@ -22,6 +22,9 @@ interface Strings {
   readonly save: string;
   readonly modified: string;
   readonly compileThis: string;
+  readonly export: string;
+  exported(path: string): string;
+  exportFailed(error: string): string;
   readonly compiledFile: string;
   readonly noProject: string;
   /** Warning when a file changed on disk while it had unsaved edits. */
@@ -56,6 +59,9 @@ const EN: Strings = {
   save: "Save",
   modified: "modified",
   compileThis: "Preview this file",
+  export: "Export",
+  exported: (path) => `exported to ${path}`,
+  exportFailed: (error) => `export failed: ${error}`,
   compiledFile: "previewed",
   noProject: "no folder open",
   changedOnDisk: (path) => `${path} changed on disk; your unsaved edits were kept`,
@@ -93,6 +99,9 @@ const RU: Strings = {
   save: "Сохранить",
   modified: "изменён",
   compileThis: "Показать этот файл",
+  export: "Экспорт",
+  exported: (path) => `экспортировано в ${path}`,
+  exportFailed: (error) => `не удалось экспортировать: ${error}`,
   compiledFile: "в превью",
   noProject: "папка не открыта",
   changedOnDisk: (path) =>

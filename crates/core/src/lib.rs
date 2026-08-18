@@ -21,6 +21,8 @@ use typst::introspection::PagedPosition;
 use typst::layout::Point;
 use typst::syntax::{DiagSpanKind, FileId, Side, Source};
 use typst_layout::PagedDocument;
+use typst_pdf::PdfOptions;
+use typst_render::RenderOptions;
 use typst_svg::SvgOptions;
 
 /// How many compilations an unused cache entry survives before eviction,
@@ -242,6 +244,47 @@ impl Session {
             cursor,
             Side::Before,
         )
+    }
+
+    /// Exports the current document as a PDF.
+    ///
+    /// Fails when the document cannot be represented — PDF export is the one
+    /// fallible target, because of tagging.
+    pub fn export_pdf(&self) -> Option<Result<Vec<u8>, String>> {
+        let document = self.document.as_ref()?;
+        Some(
+            typst_pdf::pdf(document, &PdfOptions::default())
+                .map_err(|errors| self.describe(&errors)),
+        )
+    }
+
+    /// Renders one page as a PNG at the given scale in pixels per point.
+    pub fn export_png(&self, index: usize, pixel_per_pt: f64) -> Option<Vec<u8>> {
+        let page = self.document.as_ref()?.pages().get(index)?;
+        let options = RenderOptions {
+            pixel_per_pt: pixel_per_pt.into(),
+            ..RenderOptions::default()
+        };
+        typst_render::render(page, &options).encode_png().ok()
+    }
+
+    /// Renders the whole document as a single SVG.
+    pub fn export_svg(&self) -> Option<String> {
+        let document = self.document.as_ref()?;
+        Some(typst_svg::svg_merged(
+            document,
+            &SvgOptions::default(),
+            typst::layout::Abs::pt(10.0),
+        ))
+    }
+
+    /// Turns export errors into one message for the UI.
+    fn describe(&self, errors: &[typst::diag::SourceDiagnostic]) -> String {
+        errors
+            .iter()
+            .map(|error| error.message.to_string())
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 
     /// Resolves a click in the preview.
@@ -663,6 +706,83 @@ mod tests {
         assert_eq!(files, vec!["main.typ", "parts/intro.typ"]);
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// PDF export must work for both interface languages' documents; Cyrillic
+    /// needs the embedded fonts to carry the glyphs into the file.
+    #[test]
+    fn exports_pdf_for_both_languages() {
+        for text in ["= Hello\n\nSome text.", "= Привет\n\nНемного текста."] {
+            let mut session = session(text);
+            session.preview();
+
+            let pdf = session
+                .export_pdf()
+                .expect("a compiled document")
+                .expect("PDF export should succeed");
+
+            assert!(pdf.starts_with(b"%PDF-"), "output should be a PDF");
+            assert!(pdf.len() > 1000, "a PDF with text should not be nearly empty");
+        }
+    }
+
+    /// The exported file must contain the pages the preview shows.
+    #[test]
+    fn exported_pdf_has_the_pages_of_the_preview() {
+        let mut session = session("= One\n\n#pagebreak()\n\n= Two");
+        session.preview();
+        assert_eq!(session.page_count(), 2);
+
+        let pdf = session.export_pdf().unwrap().unwrap();
+        let text = String::from_utf8_lossy(&pdf);
+
+        // Page objects, minus the single `/Pages` tree node that shares the
+        // prefix. Checked against poppler's `pdfinfo`, which reports 2 pages.
+        let pages = text.matches("/Type/Page").count() - text.matches("/Type/Pages").count();
+        assert_eq!(pages, 2, "the PDF should hold both pages");
+    }
+
+    /// PNG export produces a real image, scaled as asked.
+    #[test]
+    fn exports_png_at_the_requested_scale() {
+        let mut session = session("= Title");
+        session.preview();
+
+        let small = session.export_png(0, 1.0).expect("page 0");
+        let large = session.export_png(0, 2.0).expect("page 0");
+
+        assert!(small.starts_with(b"\x89PNG\r\n\x1a\n"), "output should be a PNG");
+        assert!(
+            large.len() > small.len(),
+            "a higher scale should produce a bigger image: {} vs {}",
+            large.len(),
+            small.len()
+        );
+        assert!(session.export_png(99, 1.0).is_none(), "out of range page");
+    }
+
+    /// SVG export covers the whole document, not just one page.
+    #[test]
+    fn exports_svg_for_the_whole_document() {
+        let mut session = session("= One\n\n#pagebreak()\n\n= Two");
+        session.preview();
+        assert_eq!(session.page_count(), 2);
+
+        let svg = session.export_svg().expect("a compiled document");
+        assert!(svg.starts_with("<svg"));
+        assert!(
+            svg.len() > session.page_svg(0).unwrap().len(),
+            "the whole document should be larger than a single page"
+        );
+    }
+
+    /// Nothing to export before anything has compiled.
+    #[test]
+    fn export_needs_a_document() {
+        let session = session("= Title");
+        assert!(session.export_pdf().is_none());
+        assert!(session.export_png(0, 1.0).is_none());
+        assert!(session.export_svg().is_none());
     }
 
     /// Editing must go through incremental reparsing, not a full reload.

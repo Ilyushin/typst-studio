@@ -69,6 +69,22 @@ export class Preview {
     });
   }
 
+  /** The page currently nearest the top of the viewport. */
+  topPage(): number {
+    let best = 0;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    const top = this.container.getBoundingClientRect().top;
+
+    for (const page of this.visible) {
+      const distance = Math.abs(page.getBoundingClientRect().top - top);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = Number(page.dataset.index);
+      }
+    }
+    return best;
+  }
+
   /** Marks where the editor cursor appears, scrolling it into view if needed. */
   highlight(spot: Spot | undefined): void {
     if (!spot) {

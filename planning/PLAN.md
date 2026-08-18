@@ -6,7 +6,7 @@ not start until the previous one works.
 
 ## Current state
 
-Done and verified (`cargo test`, 29/29; benchmark in step 3):
+Done and verified (`cargo test`, 36/36; benchmark in step 3):
 
 - `crates/core/src/world.rs` — `StudioWorld`: a `World` implementation on top of
   `typst-kit`. Open documents live in memory as `Source` objects that shadow the
@@ -21,7 +21,7 @@ Done and verified (`cargo test`, 29/29; benchmark in step 3):
 - `src-tauri`, `ui` — the running application (step 5), interface in English
   and Russian, completion and hover from the compiler (step 7), and two-way
   navigation between text and preview (step 8), and multi-file projects with
-  file watching (step 9).
+  file watching (step 9), and export to PDF, PNG, and SVG (step 10).
 
 Environment: Rust 1.97.1 (upstream MSRV is 1.92), pinned to rev `35417aa76`.
 
@@ -239,18 +239,35 @@ the status line — the user resolves it by saving, and there is no merge view.
 it while the preview stays on the main document, `Cmd+S` clears the modified
 mark, and an external edit refreshes the preview.
 
-## Step 10. Export
+## Step 10. Export — done
 
-Tasks:
+- `Session::export_pdf` (`Smart::Auto` identifier, tagging left on),
+  `export_png(index, scale)`, and `export_svg` for the whole document. PDF is
+  the one fallible target, so it returns a message the UI can show.
+- Command `export(path, page)` picks the format from the file extension and
+  reports an unsupported one instead of guessing. PNG holds a single page, so it
+  exports the page at the top of the preview.
+- The UI has an Export button with a save dialog offering PDF, PNG, and SVG;
+  the suggested name comes from the compiled file.
 
-- PDF via `typst_pdf::pdf(&document, &PdfOptions)`. `ident` stays `Smart::Auto`
-  until there is a stable project identifier.
-- PNG pages via `typst-render`, SVG via `typst-svg` (already available).
-- Save dialog, and handling of export errors (PDF export is fallible because of
-  tagging).
+Verified: 36 tests (24 core, 12 commands). `exports_pdf_for_both_languages`
+covers English and Russian documents, and `exported_pdf_has_the_pages_of_the_preview`
+checks that the file carries the pages the preview shows.
 
-Criterion: the exported PDF opens and matches the preview, for both English and
-Russian documents.
+The acceptance criterion was also checked outside the test suite, with poppler
+on an exported Russian document:
+
+```
+$ pdfinfo out.pdf     -> Pages: 2, Tagged: yes, PDF version 1.7, A4
+$ pdftotext out.pdf - -> Привет / Мир
+```
+
+So the file opens in a third-party reader, carries the page count of the
+preview, stays tagged for accessibility, and its Cyrillic text extracts
+correctly — the embedded fonts make it into the file.
+
+**Still to check by hand**: the save dialog offers the three formats and the
+exported file opens in a viewer of choice.
 
 ## Step 11. Typst Universe packages
 

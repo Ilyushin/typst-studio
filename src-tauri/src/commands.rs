@@ -91,6 +91,12 @@ pub enum Destination {
 
 type Response<T> = Result<T, String>;
 
+/// Shown when an export is requested before anything compiled successfully.
+const NOTHING_COMPILED: &str = "nothing has been compiled yet";
+
+/// Pixels per point for PNG export: enough for a crisp image on any display.
+const PNG_SCALE: f64 = 3.0;
+
 #[tauri::command]
 pub fn create_session(workspace: State<Workspace>, root: String) -> SessionId {
     workspace.create(PathBuf::from(root))
@@ -479,6 +485,49 @@ pub(crate) fn cursor_spots(
         .collect())
 }
 
+/// Writes the compiled document to `path`, choosing the format by extension.
+///
+/// PNG exports the page currently at the top of the preview, since a raster
+/// image holds one page.
+#[tauri::command]
+pub fn export(
+    workspace: State<Workspace>,
+    session: SessionId,
+    path: String,
+    page: usize,
+) -> Response<()> {
+    write_export(workspace.inner(), session, path, page)
+}
+
+pub(crate) fn write_export(
+    workspace: &Workspace,
+    session: SessionId,
+    path: String,
+    page: usize,
+) -> Response<()> {
+    let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
+    let session = handle.lock().map_err(lock_poisoned)?;
+
+    let path = PathBuf::from(path);
+    let format = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase);
+
+    let data = match format.as_deref() {
+        Some("pdf") => session
+            .export_pdf()
+            .ok_or(NOTHING_COMPILED)?
+            .map_err(|err| format!("PDF export failed: {err}"))?,
+        Some("png") => session.export_png(page, PNG_SCALE).ok_or(NOTHING_COMPILED)?,
+        Some("svg") => session.export_svg().ok_or(NOTHING_COMPILED)?.into_bytes(),
+        Some(other) => return Err(format!("unsupported format: {other}")),
+        None => return Err("the file name needs an extension".into()),
+    };
+
+    std::fs::write(&path, data).map_err(|err| format!("could not write the file: {err}"))
+}
+
 /// Renders one page to SVG.
 ///
 /// The frontend asks only for pages it is about to show: rendering the whole
@@ -798,6 +847,60 @@ mod tests {
         }
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Export writes each format to disk and rejects what it cannot produce.
+    #[test]
+    fn export_writes_the_requested_format() {
+        let root = project_dir(&[("doc.typ", "= Привет\n\n#pagebreak()\n\n= Мир\n")]);
+        let workspace = Workspace::new();
+        let session = workspace.create(root.clone());
+        project(&workspace, session, root.display().to_string()).unwrap();
+        file(&workspace, session, "doc.typ".into()).unwrap();
+        {
+            let handle = workspace.get(session).unwrap();
+            let mut guard = handle.lock().unwrap();
+            let id = guard.active_id();
+            guard.world().set_main(id);
+        }
+        assert_eq!(recompile(&workspace, session).unwrap().pages, 2);
+
+        for (name, magic) in [
+            ("out.pdf", b"%PDF".to_vec()),
+            ("out.png", b"\x89PNG".to_vec()),
+            ("out.svg", b"<svg".to_vec()),
+        ] {
+            let path = root.join(name);
+            write_export(&workspace, session, path.display().to_string(), 0).unwrap();
+            let data = std::fs::read(&path).unwrap();
+            assert!(
+                data.starts_with(&magic),
+                "{name} should start with {magic:?}"
+            );
+        }
+
+        let unsupported = write_export(
+            &workspace,
+            session,
+            root.join("out.docx").display().to_string(),
+            0,
+        );
+        assert!(unsupported.unwrap_err().contains("unsupported"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Exporting before a successful compilation must explain itself.
+    #[test]
+    fn export_without_a_document_is_reported() {
+        let workspace = Workspace::new();
+        let session = workspace.create(std::env::temp_dir());
+        let path = std::env::temp_dir().join("typst-studio-never-written.pdf");
+
+        let err = write_export(&workspace, session, path.display().to_string(), 0)
+            .unwrap_err();
+        assert!(err.contains("nothing has been compiled"), "got: {err}");
+        assert!(!path.exists(), "no file should be created");
     }
 
     /// A missing session must be an error, not a panic.

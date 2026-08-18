@@ -93,6 +93,11 @@ export class Backend {
     return invoke("is_dirty", { session: this.session });
   }
 
+  /** Writes the compiled document; the format follows the file extension. */
+  export(path: string, page: number): Promise<void> {
+    return invoke("export", { session: this.session, path, page });
+  }
+
   reload(): Promise<OpenFile | null> {
     return invoke("reload", { session: this.session });
   }
