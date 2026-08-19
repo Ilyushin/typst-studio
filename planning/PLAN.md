@@ -340,6 +340,28 @@ rather than a dev server — proven by clearing the package-index cache, startin
 the bundle, and watching the 2 MB cache reappear, which only happens after the
 frontend creates a session.
 
+Checked on the built DMG:
+
+| Check | Result |
+|---|---|
+| `hdiutil verify` | checksum valid |
+| Mounts without a dialog | after removing `licenseFile` (see below) |
+| Image contents | app plus an `/Applications` symlink |
+| `Info.plist` | 0.1.0, `app.typst.studio`, minimum macOS 11.0, icon set |
+| Installed copy on a fresh profile | starts, frontend runs, index cached |
+| Both languages compile and export | 0 errors, tagged PDFs, text extracts |
+| Included file reaches the export | yes |
+| Fonts in the PDF | Libertinus Serif and NewCMMath, all embedded |
+
+Two defects the manual pass found, both fixed:
+
+- The disk image demanded agreement to the license before mounting, because the
+  bundle set `licenseFile`. That is a dialog in front of every install and it
+  blocks scripted mounts, so the setting is gone; the license still ships in the
+  repository and inside the app.
+- The root `package.json` had no `version`, so the three versions the checklist
+  compares could not agree and `npm version` would not work.
+
 Not done, and deliberately so:
 
 - **Signing and notarization** need an Apple Developer account, and Windows

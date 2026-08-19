@@ -41,7 +41,6 @@
     "longDescription": "Typst Studio is a desktop editor for the Typst typesetting system, with live preview, completion, and export to PDF, PNG, and SVG.",
     "copyright": "Copyright (c) 2026 Typst Studio contributors",
     "publisher": "Typst Studio",
-    "licenseFile": "../LICENSE",
     "macOS": {
       "minimumSystemVersion": "11.0"
     },

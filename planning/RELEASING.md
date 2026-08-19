@@ -98,10 +98,26 @@ manifest, and both are deployment decisions rather than code:
 Publishing the manifest to GitHub Releases works, but pins updates to a
 repository that must stay public.
 
+## Notes on the disk image
+
+The image deliberately carries no license agreement. Setting `licenseFile` in
+the bundle makes macOS demand agreement before the image will mount, which adds
+a dialog to every install and blocks scripted mounts. The license ships in the
+repository and inside the app instead.
+
 ## Checklist for a release
 
 - `cargo test --workspace` and `npm --prefix ui run check` pass.
-- Versions agree across the three files.
-- The bundled app starts on a machine that has never run it, opens a folder, and
-  exports a PDF.
-- An English and a Russian document both render with the embedded fonts.
+- Versions agree across `Cargo.toml`, `src-tauri/tauri.conf.json`, and
+  `package.json`.
+- `hdiutil verify` on the image passes, and it mounts without a dialog.
+- The app copied out of the image starts with a fresh user profile.
+- Documents in both languages compile and export:
+
+  ```sh
+  cargo run --release --example checklist -p typst-studio-core -- <project> main.typ
+  pdffonts out.pdf    # every font should show emb=yes
+  pdftotext out.pdf - # text, including Cyrillic, should come back
+  ```
+
+- By hand, in the installed app: open a folder, edit a file, export a PDF.
