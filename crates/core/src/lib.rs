@@ -3,9 +3,11 @@
 //! The UI layer never talks to the Typst compiler directly: it opens documents,
 //! feeds edits into [`Session::edit`], and asks for a [`Preview`].
 
+mod packages;
 mod workspace;
 mod world;
 
+pub use self::packages::{clear_package_cache, fetch_package_index, parse_package_index};
 pub use self::workspace::{SessionId, Workspace};
 pub use self::world::StudioWorld;
 pub use typst_ide::{Completion, CompletionKind, Tooltip};
@@ -783,6 +785,34 @@ mod tests {
         assert!(session.export_pdf().is_none());
         assert!(session.export_png(0, 1.0).is_none());
         assert!(session.export_svg().is_none());
+    }
+
+    /// The fetched index must reach import completion; without it, typing an
+    /// `@preview` import offers nothing.
+    #[test]
+    fn completes_package_imports_from_the_index() {
+        let index = br#"[
+            {"name": "cetz", "version": "0.3.1", "description": "Drawing"},
+            {"name": "polylux", "version": "0.4.0", "description": "Slides"}
+        ]"#;
+        let packages = parse_package_index(index).unwrap();
+
+        // The import string has to be closed for the parser to see it, which
+        // is why the editor auto-closes quotes.
+        let text = "#import \"@preview/\"";
+        let mut session = session(text);
+        session.world().set_packages(packages);
+        session.preview();
+
+        let (_, completions) = session
+            .complete(text.len() - 1, false)
+            .expect("expected package completions");
+
+        assert!(
+            completions.iter().any(|c| c.label.contains("cetz")),
+            "expected `cetz` among {:?}",
+            completions.iter().map(|c| &c.label).collect::<Vec<_>>()
+        );
     }
 
     /// Editing must go through incremental reparsing, not a full reload.

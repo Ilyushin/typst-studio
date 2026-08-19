@@ -6,7 +6,7 @@ not start until the previous one works.
 
 ## Current state
 
-Done and verified (`cargo test`, 36/36; benchmark in step 3):
+Done and verified (`cargo test`, 39/39; benchmark in step 3):
 
 - `crates/core/src/world.rs` — `StudioWorld`: a `World` implementation on top of
   `typst-kit`. Open documents live in memory as `Source` objects that shadow the
@@ -21,7 +21,8 @@ Done and verified (`cargo test`, 36/36; benchmark in step 3):
 - `src-tauri`, `ui` — the running application (step 5), interface in English
   and Russian, completion and hover from the compiler (step 7), and two-way
   navigation between text and preview (step 8), and multi-file projects with
-  file watching (step 9), and export to PDF, PNG, and SVG (step 10).
+  file watching (step 9), export to PDF, PNG, and SVG (step 10), and Universe
+  packages with off-thread compilation (step 11).
 
 Environment: Rust 1.97.1 (upstream MSRV is 1.92), pinned to rev `35417aa76`.
 
@@ -269,17 +270,45 @@ correctly — the embedded fonts make it into the file.
 **Still to check by hand**: the save dialog offers the three formats and the
 exported file opens in a viewer of choice.
 
-## Step 11. Typst Universe packages
+## Step 11. Typst Universe packages — done
 
-Tasks:
+The blocking part is not the download itself but where it happens: a package is
+fetched inside a compilation, and a synchronous Tauri command runs on the main
+thread. So the fix was to move the heavy commands off it.
 
-- `UniversePackages` is already wired up; move downloads to a background thread
-  — they block, and would freeze the UI.
-- Download indicator, and a clear message when the network is unavailable.
-- Fill `IdeWorld::packages()` for import completions.
+- `compile`, `export`, `complete`, and `tooltip` are now async and run their work
+  through `spawn_blocking`. Their logic moved into functions taking a session
+  handle, which keeps them testable without a GUI.
+- `crates/core/src/packages.rs` fetches and parses the Universe index, keeping
+  the newest version of each package. Unparsable entries are skipped rather than
+  failing the whole index, so a registry change cannot break completion.
+- The index is cached in the user's cache directory for a day. It is two
+  megabytes; re-downloading it on every start would be rude on a metered
+  connection. Measured: 994 ms cold, 13 ms from cache, 1532 packages.
+- `src-tauri/src/index.rs` fetches it once per process on a background thread and
+  hands it to every window, then emits `packages-ready`.
+- The UI shows "compiling…" once a compilation passes 300 ms, which is what a
+  package download looks like from the outside.
+- The editor now auto-closes brackets and quotes. This is not cosmetic:
+  completion inside `#import "@preview/` only fires when the string is closed, so
+  without it the feature is invisible to anyone typing normally.
 
-Criterion: `#import "@preview/cetz:0.3.1"` on a clean machine downloads the
-package without freezing the interface.
+Verified: 39 tests (27 core, 12 commands), including
+`completes_package_imports_from_the_index` with a fixture instead of the network.
+Checked against the real registry outside the test suite:
+
+```
+#import "@preview/cetz:0.3.1"              -> compiles in 1011 ms, 1 page
+#import "@preview/definitely-not-real:9.9.9" -> package not found
+                                              (searched for @preview/definitely-not-real:9.9.9)
+```
+
+So a real package downloads and compiles, and a missing one produces a message
+that names what was searched for.
+
+**Still to check by hand**: typing `#import "@preview/` offers package names, and
+the first compilation that pulls a package shows "compiling…" rather than
+freezing the window.
 
 ## Step 12. Packaging and distribution
 

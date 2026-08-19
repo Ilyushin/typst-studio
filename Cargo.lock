@@ -5657,11 +5657,13 @@ dependencies = [
 name = "typst-studio-app"
 version = "0.1.0"
 dependencies = [
+ "ecow",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "typst",
  "typst-kit",
  "typst-studio-core",
 ]
@@ -5670,8 +5672,11 @@ dependencies = [
 name = "typst-studio-core"
 version = "0.1.0"
 dependencies = [
+ "dirs",
  "ecow",
  "rustc-hash",
+ "serde",
+ "serde_json",
  "typst",
  "typst-ide",
  "typst-kit",

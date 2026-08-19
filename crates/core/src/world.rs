@@ -40,6 +40,8 @@ pub struct StudioWorld {
     open: FxHashMap<FileId, Source>,
     /// Documents edited since they were last read from or written to disk.
     dirty: FxHashSet<FileId>,
+    /// Known Universe packages, for import completion.
+    packages: Vec<(PackageSpec, Option<EcoString>)>,
     main: FileId,
     now: Time,
 }
@@ -65,6 +67,7 @@ impl StudioWorld {
             root,
             open: FxHashMap::default(),
             dirty: FxHashSet::default(),
+            packages: Vec::new(),
             main: *SCRATCH_ID,
             now: Time::system(),
         }
@@ -90,6 +93,14 @@ impl StudioWorld {
     /// Resolves a path relative to the project root to a file id.
     pub fn id_for_relative(&self, path: &str) -> FileResult<FileId> {
         self.id_for(&self.root.join(path))
+    }
+
+    /// Supplies the package list used for import completion.
+    ///
+    /// Fetched in the background, so completion works without it and improves
+    /// once it arrives.
+    pub fn set_packages(&mut self, packages: Vec<(PackageSpec, Option<EcoString>)>) {
+        self.packages = packages;
     }
 
     /// The path of a file relative to the project root, for display.
@@ -264,9 +275,7 @@ impl typst_ide::IdeWorld for StudioWorld {
     }
 
     fn packages(&self) -> &[(PackageSpec, Option<EcoString>)] {
-        // Populated once the Universe index is fetched in the background;
-        // until then import completions simply offer nothing.
-        &[]
+        &self.packages
     }
 
     fn files(&self) -> Vec<FileId> {

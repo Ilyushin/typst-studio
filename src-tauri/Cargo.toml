@@ -16,6 +16,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 typst-studio-core = { path = "../crates/core" }
 typst-kit = { workspace = true, features = ["watcher"] }
+typst = { workspace = true }
+ecow = { workspace = true }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { workspace = true }

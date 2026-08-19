@@ -23,6 +23,8 @@ interface Strings {
   readonly modified: string;
   readonly compileThis: string;
   readonly export: string;
+  readonly compiling: string;
+  packagesReady(count: number): string;
   exported(path: string): string;
   exportFailed(error: string): string;
   readonly compiledFile: string;
@@ -60,6 +62,8 @@ const EN: Strings = {
   modified: "modified",
   compileThis: "Preview this file",
   export: "Export",
+  compiling: "compiling…",
+  packagesReady: (count) => `${count} packages available for import completion`,
   exported: (path) => `exported to ${path}`,
   exportFailed: (error) => `export failed: ${error}`,
   compiledFile: "previewed",
@@ -100,6 +104,14 @@ const RU: Strings = {
   modified: "изменён",
   compileThis: "Показать этот файл",
   export: "Экспорт",
+  compiling: "компиляция…",
+  packagesReady: (count) =>
+    `${count} ${plural("ru", count, {
+      one: "пакет доступен",
+      few: "пакета доступно",
+      many: "пакетов доступно",
+      other: "пакета доступно",
+    })} для автодополнения импортов`,
   exported: (path) => `экспортировано в ${path}`,
   exportFailed: (error) => `не удалось экспортировать: ${error}`,
   compiledFile: "в превью",

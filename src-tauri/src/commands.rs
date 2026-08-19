@@ -91,6 +91,25 @@ pub enum Destination {
 
 type Response<T> = Result<T, String>;
 
+/// A session, shared with the thread that works on it.
+pub(crate) type Handle = std::sync::Arc<std::sync::Mutex<typst_studio_core::Session>>;
+
+/// Runs `work` on a worker thread, keeping the main thread free to draw.
+async fn off_thread<T, F>(
+    workspace: &Workspace,
+    session: SessionId,
+    work: F,
+) -> Response<T>
+where
+    T: Send + 'static,
+    F: FnOnce(Handle) -> Response<T> + Send + 'static,
+{
+    let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
+    tauri::async_runtime::spawn_blocking(move || work(handle))
+        .await
+        .map_err(|err| format!("the task did not finish: {err}"))?
+}
+
 /// Shown when an export is requested before anything compiled successfully.
 const NOTHING_COMPILED: &str = "nothing has been compiled yet";
 
@@ -98,8 +117,19 @@ const NOTHING_COMPILED: &str = "nothing has been compiled yet";
 const PNG_SCALE: f64 = 3.0;
 
 #[tauri::command]
-pub fn create_session(workspace: State<Workspace>, root: String) -> SessionId {
-    workspace.create(PathBuf::from(root))
+pub fn create_session(
+    app: tauri::AppHandle,
+    workspace: State<Workspace>,
+    root: String,
+) -> SessionId {
+    let session = workspace.create(PathBuf::from(root));
+
+    // Import completion needs the Universe index; fetching it is a background
+    // concern and never blocks the window.
+    crate::index::apply_to(&app, session);
+    crate::index::fetch(app);
+
+    session
 }
 
 #[tauri::command]
@@ -305,16 +335,18 @@ pub(crate) fn edit(
 }
 
 /// Recompiles the open document.
+///
+/// Async on purpose: a synchronous command runs on the main thread, and a
+/// compilation that has to download a package would freeze the window.
 #[tauri::command]
-pub fn compile(workspace: State<Workspace>, session: SessionId) -> Response<CompileResult> {
-    recompile(workspace.inner(), session)
-}
-
-pub(crate) fn recompile(
-    workspace: &Workspace,
+pub async fn compile(
+    workspace: State<'_, Workspace>,
     session: SessionId,
 ) -> Response<CompileResult> {
-    let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
+    off_thread(workspace.inner(), session, recompile).await
+}
+
+pub(crate) fn recompile(handle: Handle) -> Response<CompileResult> {
     let mut session = handle.lock().map_err(lock_poisoned)?;
 
     let preview = session.preview();
@@ -352,22 +384,23 @@ pub(crate) fn recompile(
 
 /// Completions for the cursor position.
 #[tauri::command]
-pub fn complete(
-    workspace: State<Workspace>,
+pub async fn complete(
+    workspace: State<'_, Workspace>,
     session: SessionId,
     cursor: usize,
     explicit: bool,
 ) -> Response<Option<Completions>> {
-    completions(workspace.inner(), session, cursor, explicit)
+    off_thread(workspace.inner(), session, move |handle| {
+        completions(handle, cursor, explicit)
+    })
+    .await
 }
 
 pub(crate) fn completions(
-    workspace: &Workspace,
-    session: SessionId,
+    handle: Handle,
     cursor: usize,
     explicit: bool,
 ) -> Response<Option<Completions>> {
-    let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
     let session = handle.lock().map_err(lock_poisoned)?;
     let Some(text) = active_text(&session) else {
         return Ok(None);
@@ -394,20 +427,15 @@ pub(crate) fn completions(
 
 /// The tooltip for the cursor position.
 #[tauri::command]
-pub fn tooltip(
-    workspace: State<Workspace>,
+pub async fn tooltip(
+    workspace: State<'_, Workspace>,
     session: SessionId,
     cursor: usize,
 ) -> Response<Option<TooltipInfo>> {
-    hover(workspace.inner(), session, cursor)
+    off_thread(workspace.inner(), session, move |handle| hover(handle, cursor)).await
 }
 
-pub(crate) fn hover(
-    workspace: &Workspace,
-    session: SessionId,
-    cursor: usize,
-) -> Response<Option<TooltipInfo>> {
-    let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
+pub(crate) fn hover(handle: Handle, cursor: usize) -> Response<Option<TooltipInfo>> {
     let session = handle.lock().map_err(lock_poisoned)?;
     let Some(text) = active_text(&session) else {
         return Ok(None);
@@ -490,22 +518,19 @@ pub(crate) fn cursor_spots(
 /// PNG exports the page currently at the top of the preview, since a raster
 /// image holds one page.
 #[tauri::command]
-pub fn export(
-    workspace: State<Workspace>,
+pub async fn export(
+    workspace: State<'_, Workspace>,
     session: SessionId,
     path: String,
     page: usize,
 ) -> Response<()> {
-    write_export(workspace.inner(), session, path, page)
+    off_thread(workspace.inner(), session, move |handle| {
+        write_export(handle, path, page)
+    })
+    .await
 }
 
-pub(crate) fn write_export(
-    workspace: &Workspace,
-    session: SessionId,
-    path: String,
-    page: usize,
-) -> Response<()> {
-    let handle = workspace.get(session).ok_or_else(|| no_session(session))?;
+pub(crate) fn write_export(handle: Handle, path: String, page: usize) -> Response<()> {
     let session = handle.lock().map_err(lock_poisoned)?;
 
     let path = PathBuf::from(path);
@@ -601,7 +626,7 @@ mod tests {
         let session = workspace.create(std::env::temp_dir());
 
         open(&workspace, session, None, "= Привет мир".into()).unwrap();
-        assert!(recompile(&workspace, session).unwrap().updated);
+        assert!(recompile(session_handle(&workspace, session)).unwrap().updated);
 
         // "= Привет мир": in UTF-16 the word "мир" starts at offset 9.
         edit(&workspace, session, 9, 12, "друг".into()).unwrap();
@@ -623,7 +648,7 @@ mod tests {
         let text = "Привет\n\n#(1 + \"a\")";
         open(&workspace, session, None, text.into()).unwrap();
 
-        let result = recompile(&workspace, session).unwrap();
+        let result = recompile(session_handle(&workspace, session)).unwrap();
         let diag = result
             .diagnostics
             .iter()
@@ -648,10 +673,10 @@ mod tests {
 
         let text = "Привет\n\n#";
         open(&workspace, session, None, text.into()).unwrap();
-        recompile(&workspace, session).unwrap();
+        recompile(session_handle(&workspace, session)).unwrap();
 
         let cursor = text.encode_utf16().count();
-        let result = completions(&workspace, session, cursor, false)
+        let result = completions(session_handle(&workspace, session), cursor, false)
             .unwrap()
             .expect("expected completions");
 
@@ -670,9 +695,9 @@ mod tests {
         let session = workspace.create(std::env::temp_dir());
 
         open(&workspace, session, None, "#heading[Title]".into()).unwrap();
-        recompile(&workspace, session).unwrap();
+        recompile(session_handle(&workspace, session)).unwrap();
 
-        let tooltip = hover(&workspace, session, 4)
+        let tooltip = hover(session_handle(&workspace, session), 4)
             .unwrap()
             .expect("expected a tooltip");
         assert!(!tooltip.text.is_empty());
@@ -687,7 +712,7 @@ mod tests {
         // Cyrillic ahead of the target word makes byte and UTF-16 offsets differ.
         let text = "Привет замечательный мир";
         open(&workspace, session, None, text.into()).unwrap();
-        recompile(&workspace, session).unwrap();
+        recompile(session_handle(&workspace, session)).unwrap();
 
         let utf16_len = text.encode_utf16().count();
         let mut offsets = Vec::new();
@@ -718,12 +743,17 @@ mod tests {
         let session = workspace.create(std::env::temp_dir());
 
         open(&workspace, session, None, "Привет мир".into()).unwrap();
-        recompile(&workspace, session).unwrap();
+        recompile(session_handle(&workspace, session)).unwrap();
 
         let spots = cursor_spots(&workspace, session, 8).unwrap();
         let spot = spots.first().expect("cursor should map into the document");
         assert_eq!(spot.page, 0);
         assert!((0.0..=1.0).contains(&spot.x) && (0.0..=1.0).contains(&spot.y));
+    }
+
+    /// The session handle, as the commands hand it to their workers.
+    fn session_handle(workspace: &Workspace, session: SessionId) -> Handle {
+        workspace.get(session).expect("session should exist")
     }
 
     fn project_dir(files: &[(&str, &str)]) -> std::path::PathBuf {
@@ -761,7 +791,7 @@ mod tests {
             let main = guard.active_id();
             guard.world().set_main(main);
         }
-        assert_eq!(recompile(&workspace, session).unwrap().pages, 1);
+        assert_eq!(recompile(session_handle(&workspace, session)).unwrap().pages, 1);
 
         // Switch the editor to the chapter; the main document stays compiled.
         let opened = file(&workspace, session, "chapter.typ".into()).unwrap();
@@ -770,7 +800,7 @@ mod tests {
         let end = opened.text.encode_utf16().count();
         edit(&workspace, session, end, end, "\n#pagebreak()\n".into()).unwrap();
 
-        let result = recompile(&workspace, session).unwrap();
+        let result = recompile(session_handle(&workspace, session)).unwrap();
         assert_eq!(result.pages, 2, "the edit must reach the compiled document");
 
         std::fs::remove_dir_all(&root).ok();
@@ -796,7 +826,7 @@ mod tests {
             guard.world().set_main(main);
         }
 
-        let result = recompile(&workspace, session).unwrap();
+        let result = recompile(session_handle(&workspace, session)).unwrap();
         let diagnostic = result
             .diagnostics
             .iter()
@@ -863,7 +893,7 @@ mod tests {
             let id = guard.active_id();
             guard.world().set_main(id);
         }
-        assert_eq!(recompile(&workspace, session).unwrap().pages, 2);
+        assert_eq!(recompile(session_handle(&workspace, session)).unwrap().pages, 2);
 
         for (name, magic) in [
             ("out.pdf", b"%PDF".to_vec()),
@@ -871,7 +901,7 @@ mod tests {
             ("out.svg", b"<svg".to_vec()),
         ] {
             let path = root.join(name);
-            write_export(&workspace, session, path.display().to_string(), 0).unwrap();
+            write_export(session_handle(&workspace, session), path.display().to_string(), 0).unwrap();
             let data = std::fs::read(&path).unwrap();
             assert!(
                 data.starts_with(&magic),
@@ -879,10 +909,7 @@ mod tests {
             );
         }
 
-        let unsupported = write_export(
-            &workspace,
-            session,
-            root.join("out.docx").display().to_string(),
+        let unsupported = write_export(session_handle(&workspace, session), root.join("out.docx").display().to_string(),
             0,
         );
         assert!(unsupported.unwrap_err().contains("unsupported"));
@@ -897,7 +924,7 @@ mod tests {
         let session = workspace.create(std::env::temp_dir());
         let path = std::env::temp_dir().join("typst-studio-never-written.pdf");
 
-        let err = write_export(&workspace, session, path.display().to_string(), 0)
+        let err = write_export(session_handle(&workspace, session), path.display().to_string(), 0)
             .unwrap_err();
         assert!(err.contains("nothing has been compiled"), "got: {err}");
         assert!(!path.exists(), "no file should be created");
@@ -907,7 +934,9 @@ mod tests {
     #[test]
     fn unknown_session_is_reported() {
         let workspace = Workspace::new();
-        let err = recompile(&workspace, 42).unwrap_err();
+        // Session lookup now lives in the command wrappers, so check one of
+        // the commands that still resolves the id itself.
+        let err = file(&workspace, 42, "doc.typ".into()).unwrap_err();
         assert!(err.contains("42"), "error should name the session: {err}");
     }
 }

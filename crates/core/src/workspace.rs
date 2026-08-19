@@ -50,6 +50,11 @@ impl Workspace {
         existed
     }
 
+    /// Every open session, for work that concerns all windows.
+    pub fn all(&self) -> Vec<Arc<Mutex<Session>>> {
+        self.sessions.lock().unwrap().values().cloned().collect()
+    }
+
     /// The number of open sessions.
     pub fn len(&self) -> usize {
         self.sessions.lock().unwrap().len()

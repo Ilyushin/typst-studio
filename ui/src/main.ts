@@ -27,6 +27,7 @@ const CURSOR_DEBOUNCE_MS = 150;
 /** What the status line currently shows, so it can be redrawn on a language switch. */
 type Status =
   | { kind: "starting" }
+  | { kind: "compiling" }
   | { kind: "compiled"; pages: number; ms: number; elsewhere: number }
   | { kind: "stale"; errors: number }
   | { kind: "warning"; text: string }
@@ -114,8 +115,11 @@ async function main(): Promise<void> {
 
   async function recompile(): Promise<void> {
     queue = queue.then(async () => {
+      // Downloading a package makes a compilation take seconds; saying so beats
+      // a preview that silently sits still.
+      const slow = window.setTimeout(() => status.set({ kind: "compiling" }), 300);
       const started = performance.now();
-      const result = await backend.compile();
+      const result = await backend.compile().finally(() => window.clearTimeout(slow));
       const ms = Math.round(performance.now() - started);
 
       // Diagnostics without offsets belong to other files; they are counted,
@@ -235,6 +239,11 @@ async function main(): Promise<void> {
     view.focus();
   }
 
+  // The package index arrived, so import completion just got better.
+  await listen<number>("packages-ready", (event) => {
+    status.set({ kind: "warning", text: t().packagesReady(event.payload) });
+  });
+
   // Something changed on disk: pull it in when the editor has nothing to lose,
   // and say so when it does.
   await listen("files-changed", () => {
@@ -291,6 +300,9 @@ class StatusLine {
     switch (this.status.kind) {
       case "starting":
         this.element.textContent = strings.starting;
+        break;
+      case "compiling":
+        this.element.textContent = strings.compiling;
         break;
       case "compiled": {
         const base = strings.compiled(this.status.pages, this.status.ms);

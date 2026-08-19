@@ -4,6 +4,7 @@
 //! feeds edits into it, and asks for pages to display.
 
 mod commands;
+mod index;
 mod watch;
 
 use typst_studio_core::Workspace;
@@ -13,6 +14,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Workspace::new())
+        .manage(index::PackageIndex::default())
         .invoke_handler(tauri::generate_handler![
             commands::create_session,
             commands::close_session,

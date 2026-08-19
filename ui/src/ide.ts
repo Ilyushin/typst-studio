@@ -2,12 +2,14 @@
 
 import {
   autocompletion,
+  closeBrackets,
+  closeBracketsKeymap,
   snippetCompletion,
   type Completion as CmCompletion,
   type CompletionContext,
   type CompletionResult,
 } from "@codemirror/autocomplete";
-import { hoverTooltip, type Tooltip } from "@codemirror/view";
+import { hoverTooltip, keymap, type Tooltip } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 
 import type { Backend, CompletionItem } from "./backend";
@@ -35,6 +37,10 @@ const KIND_TO_TYPE: Record<string, string> = {
 export function ideExtensions(backend: Backend, settled: () => Promise<void>): Extension[] {
   return [
     autocompletion({ override: [(context) => complete(context, backend, settled)] }),
+    // Package completion only fires inside a closed string, so auto-closing
+    // quotes is what makes `#import "@preview/` usable at all.
+    closeBrackets(),
+    keymap.of(closeBracketsKeymap),
     hoverTooltip((_view, pos) => hover(pos, backend, settled)),
   ];
 }
