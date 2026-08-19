@@ -46,14 +46,34 @@ pub struct StudioWorld {
     now: Time,
 }
 
+/// Whether the system's fonts are available in addition to the embedded ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemFonts {
+    /// Search installed fonts too, so documents can name what the user has.
+    Include,
+    /// Use only the embedded fonts, so output does not depend on the machine.
+    Exclude,
+}
+
 impl StudioWorld {
-    /// Creates a world rooted at the given project directory.
-    ///
-    /// Fonts are the embedded set plus whatever the system provides.
+    /// Creates a world rooted at the given project directory, with system fonts
+    /// available.
     pub fn new(root: PathBuf) -> Self {
+        Self::with_fonts(root, SystemFonts::Include)
+    }
+
+    /// Creates a world with an explicit font policy.
+    ///
+    /// The embedded fonts are always registered first, so a document that names
+    /// one of them renders identically on every machine even when a font of the
+    /// same name is installed locally. System fonts extend that set rather than
+    /// override it.
+    pub fn with_fonts(root: PathBuf, system: SystemFonts) -> Self {
         let mut fonts = FontStore::new();
         fonts.extend(fonts::embedded());
-        fonts.extend(fonts::system());
+        if system == SystemFonts::Include {
+            fonts.extend(fonts::system());
+        }
 
         let packages = SystemPackages::new(SystemDownloader::new(concat!(
             "typst-studio/",

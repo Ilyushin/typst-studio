@@ -6,7 +6,7 @@ not start until the previous one works.
 
 ## Current state
 
-Done and verified (`cargo test`, 39/39; benchmark in step 3):
+Done and verified (`cargo test`, 40/40; benchmark in step 3):
 
 - `crates/core/src/world.rs` — `StudioWorld`: a `World` implementation on top of
   `typst-kit`. Open documents live in memory as `Source` objects that shadow the
@@ -22,7 +22,7 @@ Done and verified (`cargo test`, 39/39; benchmark in step 3):
   and Russian, completion and hover from the compiler (step 7), and two-way
   navigation between text and preview (step 8), and multi-file projects with
   file watching (step 9), export to PDF, PNG, and SVG (step 10), and Universe
-  packages with off-thread compilation (step 11).
+  packages with off-thread compilation (step 11), and packaging (step 12).
 
 Environment: Rust 1.97.1 (upstream MSRV is 1.92), pinned to rev `35417aa76`.
 
@@ -310,18 +310,48 @@ that names what was searched for.
 the first compilation that pulls a package shows "compiling…" rather than
 freezing the window.
 
-## Step 12. Packaging and distribution
+## Step 12. Packaging and distribution — mostly done
 
-Tasks:
+- **Icon.** Drawn in Typst (`src-tauri/icons/icon.typ`) and rendered through our
+  own core with `cargo run --release --example icon`, then expanded into every
+  platform format with `npx tauri icon`. The mark is built from rectangles
+  rather than a glyph, so it does not depend on which font is available.
+- **Bundle.** `tauri.conf.json` now carries the metadata a package needs:
+  targets, icons, category, descriptions, copyright, publisher, macOS minimum
+  version, and the NSIS install mode. `LICENSE` (Apache-2.0) was added, matching
+  what the manifests already declared.
+- **Font policy, settled.** Embedded fonts are registered first and system fonts
+  extend them, so a document naming an embedded font renders identically
+  everywhere even where a font of that name is installed. `SystemFonts::Exclude`
+  drops system fonts for reproducible output. Covered by
+  `embedded_fonts_alone_render_cyrillic`.
+- **CI.** `.github/workflows/ci.yml` runs clippy, tests, and the frontend
+  typecheck. `.github/workflows/release.yml` builds installers for Apple
+  Silicon, Intel macOS, and Windows on a `v*` tag and opens a draft release.
+  Signing secrets are passed through; without them the build produces unsigned
+  artifacts rather than failing.
+- **Release process** documented in `planning/RELEASING.md`: signing,
+  notarization, version bumping, and a pre-release checklist.
 
-- Builds for macOS (signing and notarization) and Windows.
-- Auto-update via the Tauri updater.
-- Replace the placeholder icon in `src-tauri/icons`.
-- Settle the font policy: embedded fonts give reproducible output (and cover
-  Cyrillic), system fonts give familiarity. Both are enabled today; make the
-  precedence explicit and document it.
+Verified locally: `npm run build` produces `Typst Studio.app` (66 MB) and
+`Typst Studio_0.1.0_aarch64.dmg` (25 MB). The bundled app launches both from
+Finder and directly, and its frontend really runs from the embedded assets
+rather than a dev server — proven by clearing the package-index cache, starting
+the bundle, and watching the 2 MB cache reappear, which only happens after the
+frontend creates a session.
 
-Criterion: the installer works on a clean machine and compiles a document.
+Not done, and deliberately so:
+
+- **Signing and notarization** need an Apple Developer account, and Windows
+  signing needs a certificate from a CA. The workflow and the documentation are
+  ready for both; the secrets are yours to add.
+- **Automatic updates** need a key pair and a place to publish the manifest.
+  Both are deployment decisions, and enabling the updater halfway would produce
+  a build that cannot verify its own updates. `RELEASING.md` lists the five
+  steps to turn it on.
+- The **acceptance criterion** — installs on a clean machine and compiles a
+  document — can only be finished by installing the DMG on a machine that has
+  never seen the project.
 
 ---
 

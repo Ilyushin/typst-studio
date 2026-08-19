@@ -9,7 +9,7 @@ mod world;
 
 pub use self::packages::{clear_package_cache, fetch_package_index, parse_package_index};
 pub use self::workspace::{SessionId, Workspace};
-pub use self::world::StudioWorld;
+pub use self::world::{StudioWorld, SystemFonts};
 pub use typst_ide::{Completion, CompletionKind, Tooltip};
 
 use std::ops::Range;
@@ -101,6 +101,13 @@ impl Session {
     /// Creates a session rooted at the given project directory.
     pub fn new(root: PathBuf) -> Self {
         let world = StudioWorld::new(root);
+        let active = world.main_id();
+        Self { world, document: None, peers: 1, active }
+    }
+
+    /// Creates a session with an explicit font policy.
+    pub fn with_fonts(root: PathBuf, system: SystemFonts) -> Self {
+        let world = StudioWorld::with_fonts(root, system);
         let active = world.main_id();
         Self { world, document: None, peers: 1, active }
     }
@@ -812,6 +819,23 @@ mod tests {
             completions.iter().any(|c| c.label.contains("cetz")),
             "expected `cetz` among {:?}",
             completions.iter().map(|c| &c.label).collect::<Vec<_>>()
+        );
+    }
+
+    /// The embedded fonts must carry Cyrillic on their own: output should not
+    /// depend on what happens to be installed on the machine.
+    #[test]
+    fn embedded_fonts_alone_render_cyrillic() {
+        let mut session =
+            Session::with_fonts(std::env::temp_dir(), SystemFonts::Exclude);
+        session.open(None, "Привет мир".into()).unwrap();
+        session.preview();
+
+        let svg = session.page_svg(0).expect("page 0");
+        let glyphs = svg.matches("<path").count();
+        assert!(
+            glyphs >= 5,
+            "expected glyph outlines for Cyrillic text, found {glyphs}"
         );
     }
 

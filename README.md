@@ -11,7 +11,8 @@ compiler crates directly rather than on the `typst` CLI.
 - `src-tauri` — Tauri 2 shell. Thin command layer over the core; each window
   gets its own session from the shared `Workspace`.
 - `ui` — CodeMirror 6 frontend (TypeScript, Vite).
-- `planning` — development plan and design decisions (`PLAN.md`).
+- `planning` — development plan (`PLAN.md`) and release process
+  (`RELEASING.md`).
 
 ## Design
 
@@ -31,6 +32,15 @@ every highlight in non-ASCII text.
 Each window owns a session; sessions share the process-global `comemo` cache,
 and eviction scales with their number so one window's work is not aged out by
 another's.
+
+Compilation runs off the main thread. A compilation can download a package, and
+a synchronous Tauri command would block the window while it does.
+
+**Fonts.** The embedded set is registered first and system fonts extend it, so a
+document naming an embedded font renders identically everywhere, even where a
+font of the same name is installed. `SystemFonts::Exclude` drops system fonts
+entirely for reproducible output. The embedded fonts cover Cyrillic on their
+own.
 
 ## Languages
 
@@ -61,6 +71,18 @@ Run `npm run dev` from the repository root — the Tauri CLI locates the project
 by the `src-tauri` subfolder and will not find it from elsewhere. A debug build
 loads the frontend from the Vite dev server, so `cargo run` on its own shows an
 empty window.
+
+## Packaging
+
+```sh
+npm run build     # installers in target/release/bundle/
+```
+
+Local builds are unsigned. Signing, notarization, and the release workflow are
+described in `planning/RELEASING.md`. The app icon is drawn in Typst
+(`src-tauri/icons/icon.typ`) and regenerated with
+`cargo run --release --example icon -p typst-studio-core -- src-tauri/icons /tmp/icon.png`
+followed by `npx tauri icon /tmp/icon.png -o src-tauri/icons`.
 
 The upstream dependency is pinned to a specific git revision in the workspace
 `Cargo.toml`. Typst's internal APIs change between versions; bump the pin
